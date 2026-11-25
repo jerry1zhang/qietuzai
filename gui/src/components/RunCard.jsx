@@ -17,8 +17,9 @@ import {
   FileCode2,
   Clock3,
   ImageOff,
+  Ruler,
 } from 'lucide-react';
-import { api, aspectOf, basename, cx, fileUrl, formatClock, formatDuration, qualityLabel, runStats, sizeLabel } from '../lib.js';
+import { api, aspectOf, basename, cx, fileUrl, formatClock, formatDuration, parseRatio, parseSize, qualityLabel, runStats, sizeLabel, sizeMatches } from '../lib.js';
 import { IconButton, useToast } from './ui.jsx';
 
 function useNow(active) {
@@ -31,7 +32,17 @@ function useNow(active) {
   return now;
 }
 
-function Tile({ item, aspect, now, onOpen, onUseAsRef }) {
+// 接口实际返回的尺寸：以生成时从文件头读出、存进历史的为准（EXIF 旋转已算进去），
+// 这样之后在磁盘上替换了图片也不会误报；旧记录没存宽高时，才用图片加载后浏览器报告的
+function itemDims(item, loaded) {
+  if (item.width && item.height) return { width: item.width, height: item.height };
+  return loaded || null;
+}
+
+// 像素要完全一致，比例按宽高比比较；请求是 auto 或认不出的写法时不判断
+const isMismatch = (requestedSize, dims) => sizeMatches(requestedSize, dims) === false;
+
+function Tile({ item, aspect, now, requestedSize, dims, onDims, onOpen, onUseAsRef }) {
   const toast = useToast();
   const [broken, setBroken] = useState(false);
 
@@ -54,10 +65,11 @@ function Tile({ item, aspect, now, onOpen, onUseAsRef }) {
         toast.error(err.message);
       }
     };
+    const mismatch = isMismatch(requestedSize, dims);
     return (
       <div
         className="tile tile-done"
-        style={{ aspectRatio: aspect }}
+        style={{ aspectRatio: dims ? `${dims.width} / ${dims.height}` : aspect }}
         onClick={onOpen}
         draggable
         onDragStart={(e) => {
@@ -66,7 +78,27 @@ function Tile({ item, aspect, now, onOpen, onUseAsRef }) {
         }}
         title={`${basename(item.path)}（可直接拖到其他软件）`}
       >
-        <img src={fileUrl(item.path)} alt="" loading="lazy" draggable={false} onError={() => setBroken(true)} />
+        <img
+          src={fileUrl(item.path)}
+          alt=""
+          loading="lazy"
+          draggable={false}
+          onError={() => setBroken(true)}
+          onLoad={(e) => onDims(item.index, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)}
+        />
+        {dims && (
+          <span
+            className={cx('tile-dim', mismatch && 'is-warn')}
+            title={
+              mismatch
+                ? `请求的是 ${requestedSize}，接口实际返回 ${dims.width}x${dims.height}`
+                : `实际尺寸 ${dims.width}x${dims.height}`
+            }
+          >
+            {mismatch && <AlertTriangle size={11} />}
+            {dims.width}×{dims.height}
+          </span>
+        )}
         <div className="tile-tools">
           <IconButton size="sm" title="作为参考图" onClick={act(onUseAsRef)}>
             <ImagePlus size={14} />
@@ -143,7 +175,17 @@ function statusText(run, stats, now) {
   }
 }
 
-export default function RunCard({ run, onRerun, onEdit, onDelete, onOpenImage, onUseAsRef, onPreviewRequest }) {
+function mismatchNote(run, requested, list) {
+  const sameOrientation = list.every((d) => Math.sign(d.width - d.height) === Math.sign(requested.width - requested.height));
+  const actual = [...new Set(list.map((d) => `${d.width}x${d.height}`))].join('、');
+  const head = `请求的是 ${run.size}，接口实际返回 ${actual}。`;
+  const tail = run.sizeHint
+    ? '这次已经把尺寸写进了提示词，模型也只是大致照做。这个接口似乎不支持精确控制尺寸，需要的话请在本地裁剪或缩放。'
+    : '这个接口可能忽略了 size 参数。可以在设置里打开「把尺寸写进提示词」试试（点击前往设置）。';
+  return { label: sameOrientation ? '尺寸有偏差' : '尺寸未生效', text: head + tail };
+}
+
+export default function RunCard({ run, onRerun, onEdit, onDelete, onOpenImage, onUseAsRef, onPreviewRequest, onOpenSettings }) {
   const toast = useToast();
   const isRunning = run.status === 'running';
   const now = useNow(isRunning);
@@ -154,6 +196,13 @@ export default function RunCard({ run, onRerun, onEdit, onDelete, onOpenImage, o
   const aspect = aspectOf(run.size);
   const doneItems = run.items.filter((i) => i.status === 'done' && i.path);
   const cols = Math.min(run.count, 4);
+  // 请求的方向（像素或比例），用来区分「尺寸有偏差」和「尺寸未生效」
+  const requested = parseSize(run.size) || parseRatio(run.size);
+  const [loadedDims, setLoadedDims] = useState({});
+  const onDims = (index, width, height) =>
+    setLoadedDims((m) => (m[index]?.width === width && m[index]?.height === height ? m : { ...m, [index]: { width, height } }));
+  const mismatched = doneItems.map((it) => itemDims(it, loadedDims[it.index])).filter((d) => isMismatch(run.size, d));
+  const note = mismatched.length ? mismatchNote(run, requested, mismatched) : null;
   const refs = [...run.inputs, ...(run.mask ? [{ ...run.mask, isMask: true }] : [])];
 
   return (
@@ -206,6 +255,16 @@ export default function RunCard({ run, onRerun, onEdit, onDelete, onOpenImage, o
           <span className="chip">{sizeLabel(run.size)}</span>
           {run.quality && <span className="chip">{qualityLabel(run.quality)}</span>}
           <span className="chip">× {run.count}</span>
+          {run.sizeHint && (
+            <span className="chip" title={`提示词末尾加了：${run.sizeHint}`}>
+              <Ruler size={11} /> 尺寸写入提示词
+            </span>
+          )}
+          {note && (
+            <button type="button" className="chip chip-btn chip-warn" title={note.text} onClick={onOpenSettings}>
+              <AlertTriangle size={11} /> {note.label}
+            </button>
+          )}
           {run.agentsApplied && (
             <span className="chip" title={run.finalPrompt}>
               <Bot size={11} /> Agents
@@ -220,6 +279,9 @@ export default function RunCard({ run, onRerun, onEdit, onDelete, onOpenImage, o
               item={it}
               aspect={aspect}
               now={now}
+              requestedSize={run.size}
+              dims={itemDims(it, loadedDims[it.index])}
+              onDims={onDims}
               onOpen={() =>
                 onOpenImage(
                   doneItems.map((d) => d.path),

@@ -7,6 +7,7 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { net } = require('electron');
+const { isUsableSize, normalizeSize, parseSize, parseRatio, SIZE_FORMAT_HINT } = require('../shared/size.mjs');
 
 const MAX_COUNT = 20;
 
@@ -33,10 +34,49 @@ function endpointFor(settings, isEdit) {
   return `${base}/images/${isEdit ? 'edits' : 'generations'}`;
 }
 
+// ---------- 尺寸 ----------
+const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+
+const orientationOf = (d) => (d.width > d.height ? '横版' : d.width < d.height ? '竖版' : '正方形');
+
+// 写进提示词的尺寸描述：有些中转接口忽略 size 参数，只认提示词里的描述
+function sizeHintText(size) {
+  const ratio = parseRatio(size);
+  if (ratio) return `输出图片比例为 ${ratio.width}:${ratio.height}（${orientationOf(ratio)}）。`;
+  const d = parseSize(size);
+  if (!d) return '';
+  const g = gcd(d.width, d.height);
+  const [rw, rh] = [d.width / g, d.height / g];
+  const simple = rw <= 32 && rh <= 32 ? `，${rw}:${rh}` : '';
+  return `输出图片尺寸为 ${d.width}x${d.height}（${orientationOf(d)}${simple}）。`;
+}
+
+/**
+ * 这次请求实际用的 size。
+ * 新输入要符合尺寸规则；认不出的旧值（旧版本存进设置的，或者历史记录「重新生成」带过来的）原样发送，
+ * 和以前的行为一致，不因为升级而突然不能用。
+ */
+function resolveRunSize(settings, input, { fromHistory = false } = {}) {
+  const raw = String(input ?? settings.defaultSize ?? '').trim();
+  // 历史记录里没改过的尺寸：当时发的什么就发什么（「请求详情」里显示的也是这个），不按现在的规则改写
+  if (fromHistory) return raw;
+  const size = normalizeSize(raw);
+  if (size !== null) return size;
+  if (isUsableSize(raw, settings)) return raw; // 设置里保存着的非标准写法
+  throw new Error(`尺寸格式不对：${raw}。${SIZE_FORMAT_HINT}`);
+}
+
 function applyAgents(settings, prompt) {
   const agents = (settings.agentsPrompt || '').trim();
   if (settings.agentsEnabled && agents) return { finalPrompt: `${agents}\n\n${prompt}`, agentsApplied: true };
   return { finalPrompt: prompt, agentsApplied: false };
+}
+
+// 实际发送的提示词 = Agents 提示词 + 用户提示词 + 尺寸描述（设置里打开时）
+function buildFinalPrompt(settings, prompt, size) {
+  const { finalPrompt, agentsApplied } = applyAgents(settings, prompt);
+  const sizeHint = settings.sizeInPrompt ? sizeHintText(size) : '';
+  return { finalPrompt: sizeHint ? `${finalPrompt}\n\n${sizeHint}` : finalPrompt, agentsApplied, sizeHint };
 }
 
 function maskKey(key) {
@@ -56,6 +96,69 @@ function detectImageExt(buf) {
   if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpg';
   if (buf.length >= 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'webp';
   if (buf.length >= 3 && buf.toString('ascii', 0, 3) === 'GIF') return 'gif';
+  return null;
+}
+
+// JPEG 的 EXIF 方向（APP1 段里的 0x0112 标签）。不是 EXIF 段（比如 XMP）或没有这个标签时返回 null
+function exifOrientation(buf, start, end) {
+  if (buf.toString('ascii', start, start + 6) !== 'Exif\0\0') return null;
+  const tiff = start + 6;
+  const le = buf.toString('ascii', tiff, tiff + 2) === 'II';
+  const u16 = (o) => (le ? buf.readUInt16LE(o) : buf.readUInt16BE(o));
+  const u32 = (o) => (le ? buf.readUInt32LE(o) : buf.readUInt32BE(o));
+  const ifd = tiff + u32(tiff + 4);
+  if (ifd + 2 > end) return null;
+  const n = u16(ifd);
+  for (let k = 0; k < n; k += 1) {
+    const e = ifd + 2 + k * 12;
+    if (e + 10 > end) break;
+    if (u16(e) === 0x0112) return u16(e + 8);
+  }
+  return null;
+}
+
+// 从文件头读出图片宽高（JPEG 按 EXIF 方向换算成显示时的宽高），读不出时返回 null
+function imageSize(buf) {
+  try {
+    const ext = detectImageExt(buf);
+    if (ext === 'png' && buf.length >= 24) return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+    if (ext === 'gif' && buf.length >= 10) return { width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
+    if (ext === 'webp' && buf.length >= 30) {
+      const kind = buf.toString('ascii', 12, 16);
+      if (kind === 'VP8X') return { width: buf.readUIntLE(24, 3) + 1, height: buf.readUIntLE(27, 3) + 1 };
+      if (kind === 'VP8 ') return { width: buf.readUInt16LE(26) & 0x3fff, height: buf.readUInt16LE(28) & 0x3fff };
+      if (kind === 'VP8L') {
+        const bits = buf.readUInt32LE(21);
+        return { width: (bits & 0x3fff) + 1, height: ((bits >>> 14) & 0x3fff) + 1 };
+      }
+    }
+    if (ext === 'jpg') {
+      let i = 2;
+      let orientation = 1;
+      let frame = null;
+      while (i + 9 < buf.length) {
+        if (buf[i] !== 0xff) break; // 结构不对就停下，用已经读到的
+        const marker = buf[i + 1];
+        if (marker === 0xff) {
+          i += 1;
+          continue;
+        }
+        // 到了图像数据（SOS）或文件尾，后面不会再有 EXIF 和帧头
+        if (marker === 0xda || marker === 0xd9) break;
+        // 只有读到方向标签才更新：EXIF 后面常跟一个 XMP 的 APP1 段，不能让它把方向冲掉
+        if (marker === 0xe1) orientation = exifOrientation(buf, i + 4, Math.min(buf.length, i + 2 + buf.readUInt16BE(i + 2))) ?? orientation;
+        // SOF0–SOF15（C4 / C8 / CC 不是帧头）里记录了宽高。EXIF 段可能在 SOF 之后，所以先记下来，扫完再换算
+        if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+          frame = { width: buf.readUInt16BE(i + 7), height: buf.readUInt16BE(i + 5) };
+        }
+        i += 2 + buf.readUInt16BE(i + 2);
+      }
+      // EXIF 方向 5–8 表示要转 90°，宽高互换
+      if (frame) return orientation >= 5 && orientation <= 8 ? { width: frame.height, height: frame.width } : frame;
+    }
+  } catch {
+    /* 文件头不完整 */
+  }
   return null;
 }
 
@@ -126,6 +229,16 @@ function encodeMultipart(parts) {
 }
 
 // ---------- 「预览请求」（对应 --dry-run） ----------
+// 输入框里的草稿：按当前设置规范化尺寸、拼出实际提示词。
+// 历史记录的「请求详情」（带 finalPrompt）：原样使用当时记录的 size 和提示词，不按现在的规则改写。
+function preparePreview(settings, params) {
+  const prompt = String(params.prompt || '').trim() || '（提示词）';
+  const base = { ...params, prompt, count: Number(params.count) || 1, inputs: params.inputs || [], mask: params.mask || null };
+  if (params.finalPrompt) return { ...base, size: params.size ?? '' };
+  const size = resolveRunSize(settings, params.size, { fromHistory: Boolean(params.fromHistory) });
+  return { ...base, size, finalPrompt: buildFinalPrompt(settings, prompt, size).finalPrompt };
+}
+
 function previewRequest(settings, run) {
   const isEdit = run.inputs.length > 0;
   const url = run.endpoint || endpointFor(settings, isEdit);
@@ -390,10 +503,12 @@ async function runGeneration({ settings, run, signal, onItem, limiter, fetchImpl
         throw new Error(`返回的内容不是 PNG / JPEG / WebP / GIF 图片（${bytes.length} 字节）: ${truncate(bytes.toString('latin1').replace(/[^\x20-\x7e]/g, '.'), 60)}`);
       }
       const target = await writeUnique(plan, i, run.count, bytes);
+      const dims = imageSize(bytes);
       onItem(i, {
         status: 'done',
         path: target,
         bytes: bytes.length,
+        ...(dims && { width: dims.width, height: dims.height }),
         mime: MIME_BY_EXT[path.extname(target).toLowerCase()] || 'image/png',
         ms: Date.now() - t0,
       });
@@ -431,7 +546,16 @@ module.exports = {
   resolveApiBase,
   endpointFor,
   applyAgents,
+  buildFinalPrompt,
+  normalizeSize,
+  parseSize,
+  parseRatio,
+  resolveRunSize,
+  sizeHintText,
+  imageSize,
   previewRequest,
+  preparePreview,
+  SIZE_FORMAT_HINT,
   runGeneration,
   Limiter,
   extractImage,

@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { HistoryStore } = require('../electron/store');
+const { HistoryStore, normalizeSettings } = require('../electron/store');
 const { tmpDir } = require('./helpers');
 
 test('历史记录：上次退出时还在跑的任务标记为已中断', () => {
@@ -63,4 +63,23 @@ test('历史记录：文件损坏时从空列表开始', () => {
   const dir = tmpDir();
   fs.writeFileSync(path.join(dir, 'history.json'), '{ broken');
   assert.deepEqual(new HistoryStore(dir).list(), []);
+});
+
+test('设置：能识别的尺寸统一写法，认不出的旧值原样保留', () => {
+  const s = normalizeSettings({ sizes: ['1536×1024', '16：9', '1:1 方图', '1536x1024', ' '], defaultSize: '旧默认' });
+  assert.deepEqual(s.sizes, ['1536x1024', '16:9', '1:1 方图']);
+  assert.equal(s.defaultSize, '旧默认');
+  assert.equal(normalizeSettings({ defaultSize: '800✖800' }).defaultSize, '800x800');
+  assert.equal(normalizeSettings({}).sizeInPrompt, false);
+});
+
+test('设置：列表字段是字符串或其他类型时也能加载', () => {
+  const s = normalizeSettings({ sizes: '1024x1024, 16：9', models: 'gpt-image-1,gpt-image-2', qualities: 'high' });
+  assert.deepEqual(s.sizes, ['1024x1024', '16:9']);
+  assert.deepEqual(s.models, ['gpt-image-1', 'gpt-image-2']);
+  assert.deepEqual(s.qualities, ['high']);
+  const t = normalizeSettings({ sizes: 1024, models: null, qualities: { a: 1 } });
+  assert.deepEqual(t.sizes, ['1024x1024', '1536x1024', '1024x1536', 'auto']);
+  assert.deepEqual(t.models, ['gpt-image-1']);
+  assert.deepEqual(t.qualities, []);
 });

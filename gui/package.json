@@ -1,7 +1,7 @@
 {
   "name": "qietuzai",
   "productName": "切图仔",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "GPT 生图桌面客户端（img.sh 的 GUI 版）",
   "homepage": "https://github.com/jerry1zhang/qietuzai",
   "desktopName": "qietuzai.desktop",
@@ -40,6 +40,7 @@
     "files": [
       "dist/**",
       "electron/**",
+      "shared/**",
       "build/icon.png",
       "package.json"
     ],

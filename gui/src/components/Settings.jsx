@@ -16,7 +16,7 @@ import {
   Sun,
   Moon,
 } from 'lucide-react';
-import { api, cx, MAX_COUNT, qualityLabel, sizeLabel } from '../lib.js';
+import { api, cx, MAX_COUNT, normalizeSize, qualityLabel, sizeLabel, splitSizeList } from '../lib.js';
 import { IconButton, Switch, useToast } from './ui.jsx';
 
 function uniq(list) {
@@ -47,36 +47,56 @@ function Row({ label, hint, children, vertical }) {
   );
 }
 
-function TagEditor({ values, onChange, placeholder, format = (v) => v }) {
+// 默认按逗号、顿号和空白拆成多项，不做校验
+const splitPlain = (text) => ({ valid: text.split(/[,，、\s]+/).filter(Boolean) });
+
+// 可选尺寸：标准写法统一格式；认不出的（比如有的服务支持的 2K）也允许添加，但原样保留并标成「非标准」，
+// 这样厂商自定义的写法能用，输错的也能一眼看出来
+const isNonStandardSize = (v) => normalizeSize(v) === null;
+const splitSizes = (text) => {
+  const { sizes, raw } = splitSizeList(text);
+  const notice = raw.length ? `「${raw.join('」「')}」不是标准写法，已原样添加，会原样发给接口。如果是输错了，点 × 删掉` : '';
+  return { valid: [...sizes, ...raw], notice };
+};
+
+// split：把输入框的文字拆成 { valid: 要添加的项, notice?: 添加后给用户看的提示 }
+// isFlagged：标出需要注意的项（显示成虚线框，悬停看 flagTitle）
+function TagEditor({ values, onChange, placeholder, format = (v) => v, split = splitPlain, isFlagged, flagTitle }) {
   const [text, setText] = useState('');
+  const [notice, setNotice] = useState('');
   const add = () => {
-    const parts = text.split(/[,，\s]+/).filter(Boolean);
-    if (parts.length) onChange(uniq([...values, ...parts]));
+    if (!text.trim()) return;
+    const { valid, notice: note = '' } = split(text);
+    if (valid.length) onChange(uniq([...values, ...valid]));
     setText('');
+    setNotice(note);
   };
   return (
-    <div className="tags">
-      {values.map((v) => (
-        <span className="tag" key={v}>
-          {format(v)}
-          <button type="button" title="移除" onClick={() => onChange(values.filter((x) => x !== v))}>
-            <X size={11} />
-          </button>
-        </span>
-      ))}
-      <input
-        className="tag-input"
-        value={text}
-        placeholder={placeholder}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-            e.preventDefault();
-            add();
-          }
-        }}
-        onBlur={add}
-      />
+    <div className="tag-editor">
+      <div className="tags">
+        {values.map((v) => (
+          <span className={cx('tag', isFlagged?.(v) && 'is-flagged')} key={v} title={isFlagged?.(v) ? flagTitle : undefined}>
+            {format(v)}
+            <button type="button" title="移除" onClick={() => onChange(values.filter((x) => x !== v))}>
+              <X size={11} />
+            </button>
+          </span>
+        ))}
+        <input
+          className="tag-input"
+          value={text}
+          placeholder={placeholder}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              add();
+            }
+          }}
+          onBlur={add}
+        />
+      </div>
+      {notice && <div className="tag-notice">{notice}</div>}
     </div>
   );
 }
@@ -173,6 +193,13 @@ export default function SettingsPage({ settings, onSaved, onBack, onDirtyChange,
     try {
       const c = await api.settings.importConfig();
       if (!c) return;
+      // 认不出的字段不导入，并明确告诉用户哪些没生效
+      const skipped = [];
+      // 认得的尺寸统一写法；认不出的（可能是服务商自定义的写法，img.sh 也是原样发送）原样导入并提示
+      const rawSize = String(c.size || '').trim();
+      const size = rawSize ? normalizeSize(rawSize) ?? rawSize : '';
+      const rawNote = rawSize && normalizeSize(rawSize) === null ? `size=${rawSize} 不是标准写法，已原样导入，会原样发给接口` : '';
+      if (c.count && !/^\d+$/.test(c.count)) skipped.push(`count=${c.count}（要写成 1 - ${MAX_COUNT} 的整数）`);
       setForm((f) => {
         const n = { ...f };
         if (c.url) n.apiUrl = c.url;
@@ -181,9 +208,9 @@ export default function SettingsPage({ settings, onSaved, onBack, onDirtyChange,
           n.models = uniq([...f.models, c.model]);
           n.defaultModel = c.model;
         }
-        if (c.size) {
-          n.sizes = uniq([...f.sizes, c.size]);
-          n.defaultSize = c.size;
+        if (size) {
+          n.sizes = uniq([...f.sizes, size]);
+          n.defaultSize = size;
         }
         if (c.quality !== undefined) {
           n.defaultQuality = c.quality;
@@ -193,6 +220,8 @@ export default function SettingsPage({ settings, onSaved, onBack, onDirtyChange,
         return n;
       });
       toast.success('已从 img.config 导入，确认后点「保存」');
+      if (rawNote) toast.info(rawNote);
+      if (skipped.length) toast.error(`这几项格式不对，没有导入：${skipped.join('；')}`);
     } catch (e) {
       toast.error(e.message);
     }
@@ -337,8 +366,21 @@ export default function SettingsPage({ settings, onSaved, onBack, onDirtyChange,
                 ))}
               </select>
             </Row>
-            <Row label="可选尺寸" hint="回车添加，如 1792x1024" vertical>
-              <TagEditor values={form.sizes} onChange={(sizes) => set({ sizes })} placeholder="添加尺寸…" />
+            <Row label="可选尺寸" hint="回车添加，多个用逗号分隔，如 1792x1024, 16:9" vertical>
+              <TagEditor
+                values={form.sizes}
+                onChange={(sizes) => set({ sizes })}
+                placeholder="添加尺寸…"
+                split={splitSizes}
+                isFlagged={isNonStandardSize}
+                flagTitle="非标准写法，会原样发给接口（标准写法是宽x高、比例或 auto）"
+              />
+            </Row>
+            <Row
+              label="把尺寸写进提示词"
+              hint="有些中转接口会忽略 size 参数，生成的图和选的尺寸不一致。打开后会在提示词末尾加上「输出图片尺寸为 1536x1024（横版，3:2）」这样的描述，size 参数照常发送"
+            >
+              <Switch checked={form.sizeInPrompt} onChange={(v) => set({ sizeInPrompt: v })} />
             </Row>
             <Row label="默认质量" hint="不指定时请求里不带 quality 字段">
               <select className="input select" value={form.defaultQuality} onChange={(e) => set({ defaultQuality: e.target.value })}>

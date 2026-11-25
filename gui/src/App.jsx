@@ -5,7 +5,7 @@ import Workspace from './components/Workspace.jsx';
 import SettingsPage from './components/Settings.jsx';
 import Lightbox from './components/Lightbox.jsx';
 import { ConfirmDialog, Modal, ToastProvider, useToast } from './components/ui.jsx';
-import { api, titleFrom } from './lib.js';
+import { api, isUsableSize, titleFrom } from './lib.js';
 
 function draftFromSettings(s) {
   return {
@@ -41,6 +41,9 @@ function followDefaults(d, prev, s) {
   for (const [k, sk] of PARAM_KEYS) if (d[k] === prev[sk]) next[k] = s[sk];
   return next;
 }
+
+// 草稿的尺寸是不是「编辑后重试」从历史记录带过来、而且没改过的：是的话，旧版本存下的写法也原样发送
+const sizeFromHistory = (d) => d.historySize != null && d.size === d.historySize;
 
 function upsert(list, s) {
   const next = list.filter((x) => x.id !== s.id);
@@ -165,7 +168,14 @@ function AppInner() {
   const onSettingsSaved = (next) => {
     const prev = settings;
     setSettings(next);
-    if (prev) setDraft((d) => (d ? followDefaults(d, prev, next) : d));
+    if (!prev || !draft) return;
+    let d = followDefaults(draft, prev, next);
+    // 草稿正在用的尺寸被从可选列表删掉、又不是标准写法时，切回默认尺寸，免得预览和提交报错
+    if (!isUsableSize(d.size, next, { fromHistory: sizeFromHistory(d) })) {
+      toast.info(`尺寸「${d.size}」已经不在可选列表里，输入框改回默认尺寸 ${next.defaultSize || '（不指定）'}`);
+      d = { ...d, size: next.defaultSize };
+    }
+    setDraft(d);
   };
 
   const openSettings = () => setView('settings');
@@ -217,6 +227,7 @@ function AppInner() {
       outName: draft.outName,
       inputs,
       mask,
+      fromHistory: sizeFromHistory(draft),
     };
     const sent = draft;
     submitting.current = true;
@@ -256,6 +267,7 @@ function AppInner() {
           count: draft.count,
           inputs,
           mask,
+          fromHistory: sizeFromHistory(draft),
         }),
       );
     } catch (e) {
@@ -282,6 +294,7 @@ function AppInner() {
         outName: run.outName,
         inputs: run.inputs,
         mask: run.mask,
+        fromHistory: true, // 旧版本记录下的尺寸即使不符合现在的规则，也原样重发
       });
     } catch (e) {
       toast.error(e.message);
@@ -296,6 +309,7 @@ function AppInner() {
       maskPath: run.mask?.path || null,
       model: run.model,
       size: run.size,
+      historySize: run.size,
       quality: run.quality,
       count: run.count,
       outName: run.outName || '',

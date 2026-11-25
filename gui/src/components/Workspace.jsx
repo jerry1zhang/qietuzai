@@ -126,6 +126,7 @@ export default function Workspace({
               onOpenImage={onOpenImage}
               onUseAsRef={onUseAsRef}
               onPreviewRequest={() => onRunPreview(run)}
+              onOpenSettings={onOpenSettings}
             />
           ))}
         </div>

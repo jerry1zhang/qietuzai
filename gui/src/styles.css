@@ -1727,3 +1727,58 @@ button:focus-visible,
 button:focus:not(:focus-visible) {
   outline: none;
 }
+
+/* ---------- 尺寸提示 ---------- */
+.tile-dim {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: rgba(20, 20, 20, 0.55);
+  backdrop-filter: blur(6px);
+  pointer-events: auto;
+}
+.tile-dim.is-warn {
+  background: rgba(178, 107, 0, 0.88);
+}
+.chip-warn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.chip-warn:hover {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+}
+.menu-custom-error {
+  margin-top: 6px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--danger);
+}
+.menu-custom input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+.tag-editor {
+  width: 100%;
+  min-width: 0;
+}
+.tag.is-flagged {
+  background: transparent;
+  border: 1px dashed var(--warn);
+  color: var(--warn);
+}
+.tag-notice {
+  margin-top: 6px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--warn);
+  text-align: right;
+}

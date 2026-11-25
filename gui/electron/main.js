@@ -157,20 +157,21 @@ function validateParams(p, cfg) {
   if (mask && !inputs.length) throw new Error('蒙版需要配合原图使用');
   if (mask && !fs.existsSync(mask.path)) throw new Error(`蒙版不存在: ${mask.path}`);
   const model = String(p.model || cfg.defaultModel || 'gpt-image-1').trim();
+  const size = gen.resolveRunSize(cfg, p.size, { fromHistory: Boolean(p.fromHistory) });
   return {
     prompt,
     count,
     inputs,
     mask,
     model,
-    size: String(p.size ?? cfg.defaultSize ?? '').trim(),
+    size,
     quality: String(p.quality ?? '').trim(),
     outName: String(p.outName || '').trim(),
   };
 }
 
 function makeRun(sessionId, p, cfg) {
-  const { finalPrompt, agentsApplied } = gen.applyAgents(cfg, p.prompt);
+  const { finalPrompt, agentsApplied, sizeHint } = gen.buildFinalPrompt(cfg, p.prompt, p.size);
   return {
     id: uid(),
     sessionId,
@@ -181,6 +182,7 @@ function makeRun(sessionId, p, cfg) {
     prompt: p.prompt,
     finalPrompt,
     agentsApplied,
+    sizeHint,
     model: p.model,
     size: p.size,
     quality: p.quality,
@@ -342,11 +344,7 @@ function registerIpc() {
   });
   handle('gen:preview', (params) => {
     const cfg = settings.get();
-    const prompt = String(params.prompt || '').trim() || '（提示词）';
-    const p = { ...params, prompt, count: Number(params.count) || 1, inputs: params.inputs || [], mask: params.mask || null };
-    // 历史记录里的「请求详情」使用当时实际发送的提示词
-    const finalPrompt = params.finalPrompt || gen.applyAgents(cfg, prompt).finalPrompt;
-    return gen.previewRequest(cfg, { ...p, finalPrompt });
+    return gen.previewRequest(cfg, gen.preparePreview(cfg, params));
   });
 
   // 文件

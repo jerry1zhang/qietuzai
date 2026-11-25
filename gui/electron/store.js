@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { app, safeStorage } = require('electron');
+const { normalizeSize } = require('./generator');
 
 function readJson(file, fallback) {
   try {
@@ -57,7 +58,9 @@ function defaultSettings() {
     timeoutSec: 600,
     agentsEnabled: true,
     agentsPrompt: '',
-    outputDir: path.join(app.getPath('pictures'), '切图仔'),
+    sizeInPrompt: false, // 把尺寸描述写进提示词（应对忽略 size 参数的接口）
+    // 不在 Electron 里（单元测试）时没有 app，用主目录代替
+    outputDir: path.join(app?.getPath ? app.getPath('pictures') : os.homedir(), '切图仔'),
     proxy: '',
     theme: 'system',
   };
@@ -141,6 +144,13 @@ function resolveDir(p) {
   return path.resolve(os.homedir(), dir);
 }
 
+// 旧设置里列表字段可能是字符串（手改过 settings.json 等），按逗号、换行拆开；其他类型当作空列表
+function toList(v) {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string') return v.split(/[,，\n]+/);
+  return [];
+}
+
 function clampInt(v, min, max, dflt) {
   const n = Number.parseInt(v, 10);
   if (!Number.isFinite(n)) return dflt;
@@ -152,19 +162,25 @@ function normalizeSettings(s) {
   const out = { ...s };
   out.apiUrl = String(out.apiUrl || '').trim();
   out.apiKey = String(out.apiKey || '').trim();
-  out.models = uniqStrings(out.models);
+  out.models = uniqStrings(toList(out.models));
   if (!out.models.length) out.models = [...d.models];
   if (!out.models.includes(out.defaultModel)) out.defaultModel = out.models[0];
-  out.sizes = uniqStrings(out.sizes);
+  // 能识别的尺寸统一写法；认不出的旧值原样保留：旧版本允许任意写法，不能升级后被悄悄改掉或丢掉
+  const fixSize = (v) => {
+    const raw = String(v ?? '').trim();
+    return normalizeSize(raw) ?? raw;
+  };
+  out.sizes = uniqStrings(toList(out.sizes).map(fixSize));
   if (!out.sizes.length) out.sizes = [...d.sizes];
-  out.defaultSize = String(out.defaultSize ?? '').trim();
-  out.qualities = uniqStrings(out.qualities);
+  out.defaultSize = fixSize(out.defaultSize);
+  out.qualities = uniqStrings(toList(out.qualities));
   out.defaultQuality = String(out.defaultQuality ?? '').trim();
   out.defaultCount = clampInt(out.defaultCount, 1, 20, 1);
   out.concurrency = clampInt(out.concurrency, 1, 20, 5);
   out.timeoutSec = clampInt(out.timeoutSec, 10, 3600, 600);
   out.agentsEnabled = Boolean(out.agentsEnabled);
   out.agentsPrompt = String(out.agentsPrompt || '');
+  out.sizeInPrompt = Boolean(out.sizeInPrompt);
   out.outputDir = resolveDir(out.outputDir) || d.outputDir;
   out.proxy = String(out.proxy || '').trim();
   if (!['system', 'light', 'dark'].includes(out.theme)) out.theme = 'system';
@@ -267,4 +283,4 @@ class HistoryStore {
   }
 }
 
-module.exports = { SettingsStore, HistoryStore, uid, defaultSettings };
+module.exports = { SettingsStore, HistoryStore, uid, defaultSettings, normalizeSettings };

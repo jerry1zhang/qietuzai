@@ -110,6 +110,9 @@ export function qualityLabel(q) {
   return QUALITY_LABELS[q] ?? q;
 }
 
+// 尺寸规则和主进程共用一份
+export { isUsableSize, normalizeSize, parseRatio, parseSize, SIZE_FORMAT_HINT, sizeMatches, splitSizeList } from '../shared/size.mjs';
+
 export function sizeLabel(s) {
   if (!s) return '默认尺寸';
   if (s === 'auto') return '自动尺寸';

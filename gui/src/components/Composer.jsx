@@ -12,8 +12,9 @@ import {
   X,
   Layers,
   Bot,
+  Ruler,
 } from 'lucide-react';
-import { api, cx, fileUrl, importFiles, MAX_COUNT, qualityLabel, sizeLabel } from '../lib.js';
+import { api, cx, fileUrl, importFiles, MAX_COUNT, normalizeSize, parseRatio, parseSize, qualityLabel, SIZE_FORMAT_HINT, sizeLabel } from '../lib.js';
 import { Dropdown, IconButton, Popover, Switch, useToast } from './ui.jsx';
 
 function Stepper({ value, onChange }) {
@@ -61,6 +62,7 @@ export default function Composer({ draft, setDraft, settings, onSubmit, onPrevie
 
   const isEdit = draft.attachments.some((a) => a.path !== draft.maskPath);
   const agentsOn = settings.agentsEnabled && settings.agentsPrompt.trim();
+  const sizeInPromptOn = settings.sizeInPrompt && (parseSize(draft.size) || parseRatio(draft.size));
   const lineCount = draft.perLine ? draft.prompt.split(/\r?\n/).filter((s) => s.trim()).length : 1;
   const canSubmit = draft.prompt.trim().length > 0;
 
@@ -215,6 +217,8 @@ export default function Composer({ draft, setDraft, settings, onSubmit, onPrevie
             onChange={(v) => update({ size: v })}
             allowCustom
             customPlaceholder="自定义，如 1792x1024"
+            parseCustom={normalizeSize}
+            customError={`${SIZE_FORMAT_HINT}。服务商自定义的写法（如 2K）请在「设置 → 可选尺寸」里添加`}
           />
           <Dropdown
             title="质量"
@@ -259,6 +263,16 @@ export default function Composer({ draft, setDraft, settings, onSubmit, onPrevie
             </span>
           )}
           <span className={cx('chip', isEdit && 'chip-accent')}>{isEdit ? '图生图' : '文生图'}</span>
+          {sizeInPromptOn && (
+            <button
+              type="button"
+              className="chip chip-btn"
+              title={`会在提示词末尾加上尺寸描述（${draft.size}），用于忽略 size 参数的接口。点击修改`}
+              onClick={onOpenSettings}
+            >
+              <Ruler size={12} /> 尺寸写入提示词
+            </button>
+          )}
           {agentsOn && (
             <button type="button" className="chip chip-btn" title="已启用 Agents 提示词（点击修改）" onClick={onOpenSettings}>
               <Bot size={12} /> Agents

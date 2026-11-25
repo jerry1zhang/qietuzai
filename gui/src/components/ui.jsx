@@ -53,12 +53,18 @@ export function Dropdown({
   align = 'left',
   allowCustom = false,
   customPlaceholder = '自定义…',
+  parseCustom, // 可选：校验并规范化自定义值，返回 null 表示不合法
+  customError = '格式不对',
   className,
   footer,
 }) {
   const [open, setOpen] = useState(false);
   const [custom, setCustom] = useState('');
-  const close = useCallback(() => setOpen(false), []);
+  const [customErr, setCustomErr] = useState('');
+  const close = useCallback(() => {
+    setOpen(false);
+    setCustomErr('');
+  }, []);
   const ref = useOutsideClose(open, close);
   const current = options.find((o) => o.value === value);
 
@@ -69,7 +75,15 @@ export function Dropdown({
 
   return (
     <div className={cx('dropdown', className)} ref={ref}>
-      <button type="button" className={cx('pill', open && 'is-open')} title={title} onClick={() => setOpen((o) => !o)}>
+      <button
+        type="button"
+        className={cx('pill', open && 'is-open')}
+        title={title}
+        onClick={() => {
+          setOpen((o) => !o);
+          setCustomErr('');
+        }}
+      >
         {icon}
         <span className="pill-label">{label ?? current?.label ?? value}</span>
         <ChevronDown size={13} className="pill-caret" />
@@ -93,14 +107,28 @@ export function Dropdown({
               className="menu-custom"
               onSubmit={(e) => {
                 e.preventDefault();
-                const v = custom.trim();
-                if (v) {
-                  pick(v);
-                  setCustom('');
+                const raw = custom.trim();
+                if (!raw) return;
+                const v = parseCustom ? parseCustom(raw) : raw;
+                if (v === null || v === undefined || v === '') {
+                  setCustomErr(customError);
+                  return;
                 }
+                pick(v);
+                setCustom('');
+                setCustomErr('');
               }}
             >
-              <input value={custom} onChange={(e) => setCustom(e.target.value)} placeholder={customPlaceholder} />
+              <input
+                value={custom}
+                onChange={(e) => {
+                  setCustom(e.target.value);
+                  setCustomErr('');
+                }}
+                placeholder={customPlaceholder}
+                aria-invalid={Boolean(customErr)}
+              />
+              {customErr && <div className="menu-custom-error">{customErr}</div>}
             </form>
           )}
           {footer && <div className="menu-footer">{footer(close)}</div>}
