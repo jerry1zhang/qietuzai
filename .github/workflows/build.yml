@@ -1,0 +1,42 @@
+name: build
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: gui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+      - run: npm ci
+      - name: Test
+        run: npm test
+      - name: Build
+        run: npx vite build && npx electron-builder --publish never
+        env:
+          # 不去钥匙串里找证书；macOS 用 package.json 里 mac.identity 指定的临时签名（ad-hoc）
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qietuzai-${{ matrix.os }}
+          path: |
+            gui/release/*.dmg
+            gui/release/*.zip
+            gui/release/*.exe
+            gui/release/*.AppImage
+            gui/release/*.deb
+          if-no-files-found: ignore
