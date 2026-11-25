@@ -31,6 +31,20 @@
   --mono: ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, 'Noto Sans Mono CJK SC', monospace;
 }
 
+/* 日文、韩文、繁体中文优先用各自的字体，汉字才会显示成当地的字形（界面语言写在 <html lang> 上） */
+:root:lang(ja) {
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic UI', 'Meiryo UI',
+    'Noto Sans CJK JP', 'Noto Sans JP', 'Source Han Sans JP', sans-serif;
+}
+:root:lang(ko) {
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans CJK KR', 'Noto Sans KR',
+    'Source Han Sans KR', sans-serif;
+}
+:root:lang(zh-TW) {
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang TC', 'Microsoft JhengHei UI', 'Microsoft JhengHei', 'Noto Sans CJK TC',
+    'Noto Sans TC', 'Source Han Sans TC', sans-serif;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #181818;

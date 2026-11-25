@@ -182,6 +182,9 @@ target_for() {
   else printf '%s-%d.%s' "$OUT_BASE" "$i" "$OUT_EXT"; fi
 }
 
+# base64 解码参数：GNU、busybox 和新版 macOS 认 -d，macOS 12 及以前只认 -D
+if printf 'YQ==' | base64 -d >/dev/null 2>&1; then B64_DECODE=-d; else B64_DECODE=-D; fi
+
 # 按文件头判断是不是 PNG / JPEG / GIF / WebP（od 在 Linux 和 macOS 上都有）
 is_image() {
   local hex
@@ -278,7 +281,7 @@ for ((i = 1; i <= COUNT; i++)); do
   TARGET="$(claim_target "$(target_for "$i")")" || { echo "[$i] 无法创建文件: $(target_for "$i")" >&2; continue; }
 
   if [[ -n "$B64" ]]; then
-    printf '%s' "$B64" | base64 -d > "$TARGET" 2>/dev/null || { rm -f -- "$TARGET"; echo "[$i] base64 解码失败" >&2; continue; }
+    printf '%s' "$B64" | base64 "$B64_DECODE" > "$TARGET" 2>/dev/null || { rm -f -- "$TARGET"; echo "[$i] base64 解码失败" >&2; continue; }
   else
     # --fail：HTTP 4xx/5xx 时返回失败，不把错误页当成图片保存
     curl -fsSL --max-time 300 -o "$TARGET" "$IMG_URL" || { rm -f -- "$TARGET"; echo "[$i] 下载失败: $IMG_URL" >&2; continue; }
@@ -292,7 +295,7 @@ for ((i = 1; i <= COUNT; i++)); do
 
   SAVED=$((SAVED + 1))
   SAVED_FILES+=("$TARGET")
-  echo "[$i] ✔ $TARGET  ($(awk -v s="$(stat -c %s -- "$TARGET")" 'BEGIN{printf "%.1f MB", s/1048576}'), $(file -b --mime-type -- "$TARGET" 2>/dev/null))" >&2
+  echo "[$i] ✔ $TARGET  ($(awk -v s="$(wc -c < "$TARGET")" 'BEGIN{printf "%.1f MB", s/1048576}'), $(file -b --mime-type -- "$TARGET" 2>/dev/null))" >&2
 done
 
 ELAPSED=$(( $(date +%s) - START ))

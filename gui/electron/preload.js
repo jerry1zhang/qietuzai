@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('api', {
     get: () => call('settings:get'),
     save: (patch) => call('settings:save', patch),
     keyStorage: () => call('settings:keyStorage'),
+    forgetKey: () => call('settings:forgetKey'),
     fetchModels: (apiUrl, apiKey, proxy) => call('settings:fetchModels', apiUrl, apiKey, proxy),
     resolveEndpoint: (apiUrl) => call('settings:resolveEndpoint', apiUrl),
     importConfig: () => call('settings:importConfig'),

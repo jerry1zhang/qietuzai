@@ -2,8 +2,10 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { SquarePen, Search, Settings, FolderOpen, Pencil, Trash2, Loader2, X } from 'lucide-react';
 import { cx, groupSessions, relativeTime, sessionRunning } from '../lib.js';
 import { IconButton } from './ui.jsx';
+import { useT } from '../i18n.jsx';
 
 function SessionItem({ s, active, onSelect, onRename, onDelete, now }) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(s.title);
   const inputRef = useRef(null);
@@ -18,8 +20,8 @@ function SessionItem({ s, active, onSelect, onRename, onDelete, now }) {
 
   const commit = () => {
     setEditing(false);
-    const t = title.trim();
-    if (t && t !== s.title) onRename(s.id, t);
+    const next = title.trim();
+    if (next && next !== s.title) onRename(s.id, next);
   };
 
   if (editing) {
@@ -52,13 +54,13 @@ function SessionItem({ s, active, onSelect, onRename, onDelete, now }) {
     >
       <span className="session-title">{s.title}</span>
       <span className="session-meta">
-        {busy ? <Loader2 size={13} className="spin" /> : <span className="session-time">{relativeTime(s.updatedAt, now)}</span>}
+        {busy ? <Loader2 size={13} className="spin" /> : <span className="session-time">{relativeTime(s.updatedAt, now, t)}</span>}
       </span>
       <span className="session-actions" onClick={(e) => e.stopPropagation()}>
-        <IconButton title="重命名" size="xs" onClick={() => setEditing(true)}>
+        <IconButton title={t('common.rename')} size="xs" onClick={() => setEditing(true)}>
           <Pencil size={13} />
         </IconButton>
-        <IconButton title="删除" size="xs" onClick={() => onDelete(s)}>
+        <IconButton title={t('common.delete')} size="xs" onClick={() => onDelete(s)}>
           <Trash2 size={13} />
         </IconButton>
       </span>
@@ -67,6 +69,7 @@ function SessionItem({ s, active, onSelect, onRename, onDelete, now }) {
 }
 
 export default function Sidebar({ sessions, activeId, view, onSelect, onNew, onRename, onDelete, onOpenSettings, onOpenOutput }) {
+  const t = useT();
   const [q, setQ] = useState('');
   const [now, setNow] = useState(Date.now());
 
@@ -93,14 +96,14 @@ export default function Sidebar({ sessions, activeId, view, onSelect, onNew, onR
       <div className="sidebar-actions">
         <button type="button" className={cx('nav-btn', view === 'work' && !activeId && 'is-active')} onClick={onNew}>
           <SquarePen size={16} />
-          <span>新建任务</span>
+          <span>{t('sidebar.newTask')}</span>
           <kbd>{window.api?.platform === 'darwin' ? '⌘N' : 'Ctrl+N'}</kbd>
         </button>
         <div className="search">
           <Search size={14} />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索历史" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('sidebar.search')} />
           {q && (
-            <IconButton title="清空" size="xs" onClick={() => setQ('')}>
+            <IconButton title={t('common.clear')} size="xs" onClick={() => setQ('')}>
               <X size={12} />
             </IconButton>
           )}
@@ -108,10 +111,10 @@ export default function Sidebar({ sessions, activeId, view, onSelect, onNew, onR
       </div>
 
       <div className="session-list">
-        {groups.length === 0 && <div className="session-empty">{q ? '没有匹配的记录' : '还没有历史记录'}</div>}
+        {groups.length === 0 && <div className="session-empty">{q ? t('sidebar.noMatch') : t('sidebar.empty')}</div>}
         {groups.map((g) => (
           <div key={g.key} className="session-group">
-            <div className="session-group-label">{g.label}</div>
+            <div className="session-group-label">{t(`group.${g.key}`)}</div>
             {g.items.map((s) => (
               <SessionItem
                 key={s.id}
@@ -130,9 +133,9 @@ export default function Sidebar({ sessions, activeId, view, onSelect, onNew, onR
       <div className="sidebar-foot">
         <button type="button" className={cx('nav-btn', view === 'settings' && 'is-active')} onClick={onOpenSettings}>
           <Settings size={16} />
-          <span>设置</span>
+          <span>{t('common.settings')}</span>
         </button>
-        <IconButton title="打开输出目录" onClick={onOpenOutput}>
+        <IconButton title={t('common.openOutputDir')} onClick={onOpenOutput}>
           <FolderOpen size={16} />
         </IconButton>
       </div>

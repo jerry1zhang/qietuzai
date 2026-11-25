@@ -18,6 +18,9 @@ const {
 } = require('electron');
 const { SettingsStore, HistoryStore, uid } = require('./store');
 const gen = require('./generator');
+const i18n = require('../shared/i18n.mjs');
+
+const { t } = i18n;
 
 const isDev = process.argv.includes('--dev');
 const isMac = process.platform === 'darwin';
@@ -106,6 +109,19 @@ function applyTheme() {
   nativeTheme.themeSource = settings.get().theme;
 }
 
+// 主进程的报错、对话框标题、写进提示词的尺寸描述，跟界面用同一种语言
+function systemLanguages() {
+  try {
+    return [...app.getPreferredSystemLanguages(), app.getLocale()];
+  } catch {
+    return [app.getLocale()];
+  }
+}
+
+function applyLanguage() {
+  i18n.setLocale(i18n.resolveLocale(settings.get().language, systemLanguages()));
+}
+
 function updateTitleBarOverlay() {
   if (!isWin || !win) return;
   const t = currentTheme();
@@ -144,18 +160,18 @@ async function storeInputFile(file) {
 
 // ---------------- 生图任务 ----------------
 function validateParams(p, cfg) {
-  if (!cfg.apiUrl) throw new Error('请先在设置中填写接口地址');
-  if (!cfg.apiKey) throw new Error('请先在设置中填写 API Key');
+  if (!cfg.apiUrl) throw new Error(t('main.needApiUrl'));
+  if (!cfg.apiKey) throw new Error(t('main.needApiKey'));
   const prompt = String(p.prompt || '').trim();
-  if (!prompt) throw new Error('提示词不能为空');
+  if (!prompt) throw new Error(t('main.emptyPrompt'));
   const count = Number.parseInt(p.count, 10);
-  if (!Number.isFinite(count) || count < 1) throw new Error('数量必须 >= 1');
-  if (count > gen.MAX_COUNT) throw new Error(`一次最多 ${gen.MAX_COUNT} 张`);
+  if (!Number.isFinite(count) || count < 1) throw new Error(t('main.countMin'));
+  if (count > gen.MAX_COUNT) throw new Error(t('main.countMax', { max: gen.MAX_COUNT }));
   const inputs = (p.inputs || []).map((f) => ({ path: f.path, name: f.name || path.basename(f.path) }));
-  for (const f of inputs) if (!fs.existsSync(f.path)) throw new Error(`原图不存在: ${f.path}`);
+  for (const f of inputs) if (!fs.existsSync(f.path)) throw new Error(t('main.inputMissing', { path: f.path }));
   const mask = p.mask ? { path: p.mask.path, name: p.mask.name || path.basename(p.mask.path) } : null;
-  if (mask && !inputs.length) throw new Error('蒙版需要配合原图使用');
-  if (mask && !fs.existsSync(mask.path)) throw new Error(`蒙版不存在: ${mask.path}`);
+  if (mask && !inputs.length) throw new Error(t('main.maskNeedsInput'));
+  if (mask && !fs.existsSync(mask.path)) throw new Error(t('main.maskMissing', { path: mask.path }));
   const model = String(p.model || cfg.defaultModel || 'gpt-image-1').trim();
   const size = gen.resolveRunSize(cfg, p.size, { fromHistory: Boolean(p.fromHistory) });
   return {
@@ -250,7 +266,7 @@ function handle(channel, fn) {
 }
 
 function assertImagePath(p) {
-  if (typeof p !== 'string' || !path.isAbsolute(p)) throw new Error('无效路径');
+  if (typeof p !== 'string' || !path.isAbsolute(p)) throw new Error(t('main.invalidPath'));
   return p;
 }
 
@@ -259,8 +275,14 @@ function registerIpc() {
     platform: process.platform,
     version: app.getVersion(),
     userData: app.getPath('userData'),
+    // 设置里的语言是「跟随系统」时，界面按这个列表选语言
+    systemLanguages: systemLanguages(),
   }));
   handle('settings:keyStorage', () => settings.keyStorage);
+  handle('settings:forgetKey', async () => {
+    await settings.forgetUnreadableKey();
+    return settings.keyStorage;
+  });
 
   // 设置
   handle('settings:get', () => settings.get());
@@ -268,6 +290,7 @@ function registerIpc() {
     const next = await settings.save(patch || {});
     limiter.pump(); // 调大并发数后，排队中的请求马上开始
     applyTheme();
+    applyLanguage();
     await applyProxy();
     return next;
   });
@@ -286,7 +309,7 @@ function registerIpc() {
   });
   handle('settings:importConfig', async () => {
     const r = await dialog.showOpenDialog(win, {
-      title: '选择 img.config',
+      title: t('main.pickConfig'),
       properties: ['openFile', 'showHiddenFiles'],
     });
     if (r.canceled || !r.filePaths[0]) return null;
@@ -303,7 +326,7 @@ function registerIpc() {
   });
   handle('dialog:pickDir', async (current) => {
     const r = await dialog.showOpenDialog(win, {
-      title: '选择图片保存目录',
+      title: t('main.pickOutputDir'),
       defaultPath: current || undefined,
       properties: ['openDirectory', 'createDirectory'],
     });
@@ -350,16 +373,16 @@ function registerIpc() {
   // 文件
   handle('files:pickImages', async () => {
     const r = await dialog.showOpenDialog(win, {
-      title: '选择参考图',
+      title: t('main.pickImages'),
       properties: ['openFile', 'multiSelections'],
-      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
+      filters: [{ name: t('main.imageFilter'), extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
     });
     if (r.canceled) return [];
     return Promise.all(r.filePaths.map(storeInputFile));
   });
   handle('files:importImageData', async (name, data) => {
     const buf = Buffer.from(data);
-    if (!buf.length) throw new Error('空文件');
+    if (!buf.length) throw new Error(t('main.emptyFile'));
     return storeInputBuffer(buf, name);
   });
   handle('files:importImagePath', async (p) => storeInputFile(assertImagePath(p)));
@@ -381,7 +404,7 @@ function registerIpc() {
   });
   handle('files:copyImage', (p) => {
     const img = nativeImage.createFromPath(assertImagePath(p));
-    if (img.isEmpty()) throw new Error('该图片格式不支持复制到剪贴板');
+    if (img.isEmpty()) throw new Error(t('main.clipboardUnsupported'));
     clipboard.writeImage(img);
     return true;
   });
@@ -429,6 +452,7 @@ app.on('second-instance', () => {
 app.whenReady().then(async () => {
   const dataDir = app.getPath('userData');
   settings = await SettingsStore.load(dataDir);
+  applyLanguage(); // 要在读历史记录之前：上次中断的任务会写一条错误信息
   history = new HistoryStore(dataDir);
   applyTheme();
   await applyProxy().catch(() => {});

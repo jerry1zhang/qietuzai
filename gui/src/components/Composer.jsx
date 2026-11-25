@@ -14,19 +14,21 @@ import {
   Bot,
   Ruler,
 } from 'lucide-react';
-import { api, cx, fileUrl, importFiles, MAX_COUNT, normalizeSize, parseRatio, parseSize, qualityLabel, SIZE_FORMAT_HINT, sizeLabel } from '../lib.js';
+import { api, cx, fileUrl, importFiles, MAX_COUNT, normalizeSize, parseRatio, parseSize, qualityLabel, sizeLabel } from '../lib.js';
+import { useT } from '../i18n.jsx';
 import { Dropdown, IconButton, Popover, Switch, useToast } from './ui.jsx';
 
 function Stepper({ value, onChange }) {
+  const t = useT();
   const set = (v) => onChange(Math.min(MAX_COUNT, Math.max(1, Number.parseInt(v, 10) || 1)));
   return (
-    <div className="stepper" title="生成数量（同一提示词并发生成多张变体）">
-      <button type="button" onClick={() => set(value - 1)} disabled={value <= 1} aria-label="减少">
+    <div className="stepper" title={t('composer.countTitle')}>
+      <button type="button" onClick={() => set(value - 1)} disabled={value <= 1} aria-label={t('composer.decrease')}>
         <Minus size={13} />
       </button>
-      <input value={value} onChange={(e) => set(e.target.value)} inputMode="numeric" aria-label="数量" />
-      <span className="stepper-unit">张</span>
-      <button type="button" onClick={() => set(value + 1)} disabled={value >= MAX_COUNT} aria-label="增加">
+      <input value={value} onChange={(e) => set(e.target.value)} inputMode="numeric" aria-label={t('composer.count')} />
+      <span className="stepper-unit">{t('composer.unit', { count: value })}</span>
+      <button type="button" onClick={() => set(value + 1)} disabled={value >= MAX_COUNT} aria-label={t('composer.increase')}>
         <Plus size={13} />
       </button>
     </div>
@@ -34,20 +36,21 @@ function Stepper({ value, onChange }) {
 }
 
 function Attachment({ a, isMask, canMask, onRemove, onToggleMask, onPreview }) {
+  const t = useT();
   return (
     <div className={cx('attach', isMask && 'is-mask')}>
       <img src={fileUrl(a.path)} alt={a.name} onClick={onPreview} draggable={false} />
-      <button type="button" className="attach-remove" title="移除" onClick={onRemove}>
+      <button type="button" className="attach-remove" title={t('common.remove')} onClick={onRemove}>
         <X size={11} />
       </button>
       {(canMask || isMask) && (
         <button
           type="button"
           className={cx('attach-mask', isMask && 'is-on')}
-          title={isMask ? '取消蒙版' : '设为蒙版（PNG 透明区域为要修改的部分）'}
+          title={isMask ? t('composer.unsetMask') : t('composer.setMask')}
           onClick={onToggleMask}
         >
-          蒙版
+          {t('composer.mask')}
         </button>
       )}
     </div>
@@ -56,6 +59,7 @@ function Attachment({ a, isMask, canMask, onRemove, onToggleMask, onPreview }) {
 
 export default function Composer({ draft, setDraft, settings, onSubmit, onPreviewRequest, onPreviewImage, onOpenSettings, autoFocus, variant }) {
   const toast = useToast();
+  const t = useT();
   const taRef = useRef(null);
   const [dragOver, setDragOver] = useState(false);
   const dragDepth = useRef(0);
@@ -98,7 +102,7 @@ export default function Composer({ draft, setDraft, settings, onSubmit, onPrevie
   const onFiles = async (files) => {
     try {
       const list = await importFiles(files);
-      if (!list.length) toast.error('只支持 png / jpg / webp / gif 图片');
+      if (!list.length) toast.error(t('composer.unsupportedImage'));
       addAttachments(list);
     } catch (e) {
       toast.error(e.message);
@@ -125,24 +129,26 @@ export default function Composer({ draft, setDraft, settings, onSubmit, onPrevie
 
   const toggleMask = (p) => setDraft((d) => ({ ...d, maskPath: d.maskPath === p ? null : p }));
 
-  const modelOptions = settings.models.map((m) => ({ value: m, label: m, hint: m === settings.defaultModel ? '默认' : undefined }));
+  const modelOptions = settings.models.map((m) => ({ value: m, label: m, hint: m === settings.defaultModel ? t('common.default') : undefined }));
   const sizeOptions = [...new Set([...(settings.sizes || []), draft.size].filter(Boolean))].map((s) => ({
     value: s,
-    label: sizeLabel(s),
-    hint: s === settings.defaultSize ? '默认' : undefined,
+    label: sizeLabel(s, t),
+    hint: s === settings.defaultSize ? t('common.default') : undefined,
   }));
   const qualityOptions = [...new Set(['', ...(settings.qualities || []), draft.quality])].map((q) => ({
     value: q,
-    label: q ? `${qualityLabel(q)}${qualityLabel(q) !== q ? ` (${q})` : ''}` : '不指定（不发送 quality）',
+    label: q ? `${qualityLabel(q, t)}${qualityLabel(q, t) !== q ? ` (${q})` : ''}` : t('quality.unset'),
   }));
 
-  const placeholder = isEdit
-    ? draft.perLine
-      ? '描述你想对参考图做的修改，每行一个提示词…'
-      : '描述你想对参考图做的修改，例如：把背景换成雪景'
-    : draft.perLine
-      ? '每行一个提示词，将分别生成…'
-      : '描述你想生成的图片，可拖入或粘贴参考图切换到图生图…';
+  const placeholder = t(
+    isEdit
+      ? draft.perLine
+        ? 'composer.placeholderEditPerLine'
+        : 'composer.placeholderEdit'
+      : draft.perLine
+        ? 'composer.placeholderPerLine'
+        : 'composer.placeholder',
+  );
 
   return (
     <div
@@ -164,7 +170,7 @@ export default function Composer({ draft, setDraft, settings, onSubmit, onPrevie
         onFiles(e.dataTransfer.files);
       }}
     >
-      {dragOver && <div className="drop-hint">松开以添加参考图</div>}
+      {dragOver && <div className="drop-hint">{t('composer.dropHint')}</div>}
 
       {draft.attachments.length > 0 && (
         <div className="attach-row">
@@ -196,42 +202,42 @@ export default function Composer({ draft, setDraft, settings, onSubmit, onPrevie
 
       <div className="composer-bar">
         <div className="composer-tools">
-          <IconButton title="添加参考图（图生图）" onClick={pickImages}>
+          <IconButton title={t('composer.addRef')} onClick={pickImages}>
             <ImagePlus size={17} />
           </IconButton>
           <Dropdown
-            title="模型"
+            title={t('composer.model')}
             icon={<Box size={14} />}
             value={draft.model}
             options={modelOptions}
             onChange={(v) => update({ model: v })}
             allowCustom
-            customPlaceholder="输入其他模型名，回车使用"
+            customPlaceholder={t('composer.modelCustom')}
           />
           <Dropdown
-            title="尺寸"
+            title={t('composer.size')}
             icon={<Ratio size={14} />}
             value={draft.size}
-            label={sizeLabel(draft.size)}
+            label={sizeLabel(draft.size, t)}
             options={sizeOptions}
             onChange={(v) => update({ size: v })}
             allowCustom
-            customPlaceholder="自定义，如 1792x1024"
+            customPlaceholder={t('composer.sizeCustom')}
             parseCustom={normalizeSize}
-            customError={`${SIZE_FORMAT_HINT}。服务商自定义的写法（如 2K）请在「设置 → 可选尺寸」里添加`}
+            customError={t('composer.sizeCustomError', { hint: t('size.formatHint') })}
           />
           <Dropdown
-            title="质量"
+            title={t('composer.quality')}
             icon={<Sparkles size={14} />}
             value={draft.quality}
-            label={qualityLabel(draft.quality)}
+            label={qualityLabel(draft.quality, t)}
             options={qualityOptions}
             onChange={(v) => update({ quality: v })}
           />
           <Stepper value={draft.count} onChange={(v) => update({ count: v })} />
           <Popover
             trigger={({ open, toggle }) => (
-              <IconButton title="更多选项" onClick={toggle} active={open || draft.perLine || !!draft.outName}>
+              <IconButton title={t('composer.more')} onClick={toggle} active={open || draft.perLine || !!draft.outName}>
                 <SlidersHorizontal size={16} />
               </IconButton>
             )}
@@ -239,17 +245,17 @@ export default function Composer({ draft, setDraft, settings, onSubmit, onPrevie
             {() => (
               <div className="more-panel">
                 <label className="field">
-                  <span className="field-label">输出文件名（可选）</span>
+                  <span className="field-label">{t('composer.outName')}</span>
                   <input
                     value={draft.outName}
                     onChange={(e) => update({ outName: e.target.value })}
-                    placeholder="例如 banner.png 或 子目录/set.png"
+                    placeholder={t('composer.outNamePlaceholder')}
                   />
-                  <span className="field-hint">相对于保存目录；多张时自动加 -1、-2… 后缀，留空则按时间命名</span>
+                  <span className="field-hint">{t('composer.outNameHint')}</span>
                 </label>
                 <div className="field">
-                  <Switch checked={draft.perLine} onChange={(v) => update({ perLine: v })} label="批量：每行一个提示词" />
-                  <span className="field-hint">开启后每一行提示词单独生成一组，每组 {draft.count} 张</span>
+                  <Switch checked={draft.perLine} onChange={(v) => update({ perLine: v })} label={t('composer.perLine')} />
+                  <span className="field-hint">{t('composer.perLineHint', { count: draft.count })}</span>
                 </div>
               </div>
             )}
@@ -258,30 +264,30 @@ export default function Composer({ draft, setDraft, settings, onSubmit, onPrevie
 
         <div className="composer-right">
           {draft.perLine && lineCount > 1 && (
-            <span className="chip chip-accent" title="批量提示词">
-              <Layers size={12} /> {lineCount} 组 × {draft.count}
+            <span className="chip chip-accent" title={t('composer.batchTitle')}>
+              <Layers size={12} /> {t('composer.batchChip', { count: lineCount, per: draft.count })}
             </span>
           )}
-          <span className={cx('chip', isEdit && 'chip-accent')}>{isEdit ? '图生图' : '文生图'}</span>
+          <span className={cx('chip', isEdit && 'chip-accent')}>{t(isEdit ? 'mode.edit' : 'mode.generate')}</span>
           {sizeInPromptOn && (
             <button
               type="button"
               className="chip chip-btn"
-              title={`会在提示词末尾加上尺寸描述（${draft.size}），用于忽略 size 参数的接口。点击修改`}
+              title={t('composer.sizeInPromptTitle', { size: draft.size })}
               onClick={onOpenSettings}
             >
-              <Ruler size={12} /> 尺寸写入提示词
+              <Ruler size={12} /> {t('composer.sizeInPrompt')}
             </button>
           )}
           {agentsOn && (
-            <button type="button" className="chip chip-btn" title="已启用 Agents 提示词（点击修改）" onClick={onOpenSettings}>
+            <button type="button" className="chip chip-btn" title={t('composer.agentsTitle')} onClick={onOpenSettings}>
               <Bot size={12} /> Agents
             </button>
           )}
-          <IconButton title="预览请求（dry-run，不发送）" onClick={onPreviewRequest}>
+          <IconButton title={t('composer.preview')} onClick={onPreviewRequest}>
             <FileCode2 size={16} />
           </IconButton>
-          <button type="button" className="send-btn" title="生成 (Enter)" disabled={!canSubmit} onClick={onSubmit}>
+          <button type="button" className="send-btn" title={t('composer.send')} disabled={!canSubmit} onClick={onSubmit}>
             <ArrowUp size={18} />
           </button>
         </div>

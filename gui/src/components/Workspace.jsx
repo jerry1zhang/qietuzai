@@ -4,13 +4,9 @@ import RunCard from './RunCard.jsx';
 import Composer from './Composer.jsx';
 import { IconButton } from './ui.jsx';
 import { runStats } from '../lib.js';
+import { useT } from '../i18n.jsx';
 
-const EXAMPLES = [
-  '一只戴着宇航员头盔的柴犬，坐在月球表面，电影感光影，35mm',
-  '极简风格的咖啡店 Logo，线条插画，米白色背景',
-  '赛博朋克城市夜景，霓虹灯，雨后街道反光，广角',
-  '电商主图：白色运动鞋悬浮在柔和渐变背景上，产品摄影',
-];
+const EXAMPLES = ['workspace.example1', 'workspace.example2', 'workspace.example3', 'workspace.example4'];
 
 export default function Workspace({
   session,
@@ -28,6 +24,7 @@ export default function Workspace({
   onOpenSettings,
   onOpenOutput,
 }) {
+  const t = useT();
   const scrollRef = useRef(null);
   const runCount = session?.runs.length || 0;
   const configured = settings.apiUrl && settings.apiKey;
@@ -41,9 +38,9 @@ export default function Workspace({
   const banner = !configured && (
     <div className="banner">
       <AlertCircle size={15} />
-      <span>还没有配置接口地址和 API Key</span>
+      <span>{t('workspace.notConfigured')}</span>
       <button type="button" className="link-btn" onClick={onOpenSettings}>
-        去设置
+        {t('workspace.goSettings')}
       </button>
     </div>
   );
@@ -68,14 +65,14 @@ export default function Workspace({
         <header className="main-header drag" />
         <div className="hero">
           <div className="hero-inner">
-            <h1>想生成什么图？</h1>
-            <p className="hero-sub">输入提示词直接生成；拖入或粘贴图片即为图生图。</p>
+            <h1>{t('workspace.heroTitle')}</h1>
+            <p className="hero-sub">{t('workspace.heroSub')}</p>
             {banner}
             {composer('hero')}
             <div className="examples">
-              {EXAMPLES.map((ex) => (
-                <button type="button" key={ex} className="example" onClick={() => setDraft((d) => ({ ...d, prompt: ex }))}>
-                  {ex}
+              {EXAMPLES.map((key) => (
+                <button type="button" key={key} className="example" onClick={() => setDraft((d) => ({ ...d, prompt: t(key) }))}>
+                  {t(key)}
                 </button>
               ))}
             </div>
@@ -102,12 +99,12 @@ export default function Workspace({
         </div>
         <div className="main-header-right no-drag">
           <span className="muted small">
-            {session.runs.length} 次生成 · {totals.done} 张图
+            {t('workspace.runCount', { count: session.runs.length })} · {t('workspace.imageCount', { count: totals.done })}
           </span>
-          <IconButton title="打开输出目录" onClick={onOpenOutput}>
+          <IconButton title={t('common.openOutputDir')} onClick={onOpenOutput}>
             <FolderOpen size={16} />
           </IconButton>
-          <IconButton title="设置" onClick={onOpenSettings}>
+          <IconButton title={t('common.settings')} onClick={onOpenSettings}>
             <Settings size={16} />
           </IconButton>
         </div>
@@ -115,7 +112,7 @@ export default function Workspace({
 
       <div className="thread" ref={scrollRef}>
         <div className="thread-inner">
-          {session.runs.length === 0 && <div className="thread-empty">这里还没有生成记录</div>}
+          {session.runs.length === 0 && <div className="thread-empty">{t('workspace.empty')}</div>}
           {session.runs.map((run) => (
             <RunCard
               key={run.id}
@@ -136,7 +133,7 @@ export default function Workspace({
         <div className="composer-dock-inner">
           {banner}
           {composer('dock')}
-          <div className="composer-hint">Enter 生成 · Shift+Enter 换行 · 支持拖入 / 粘贴图片</div>
+          <div className="composer-hint">{t('workspace.composerHint')}</div>
         </div>
       </div>
     </main>

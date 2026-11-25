@@ -3,6 +3,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+// 报错信息等按简体中文断言
+require('../shared/i18n.mjs').setLocale('zh-CN');
+
 // 只需要文件头能被识别成 PNG
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(24, 7)]);
 const PNG_B64 = PNG.toString('base64');

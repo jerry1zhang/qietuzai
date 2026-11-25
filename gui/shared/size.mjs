@@ -6,8 +6,6 @@
 // - auto
 // 空串表示不指定。
 
-export const SIZE_FORMAT_HINT = '尺寸要写成「宽x高」（如 1536x1024）、比例（如 16:9）或 auto';
-
 const PIXEL_SEP = '[xX×✕✖✗*＊ｘＸ]';
 const RATIO_SEP = '[:：]';
 
@@ -37,6 +35,25 @@ export function parseSize(size) {
 export function parseRatio(size) {
   const m = /^(\d+):(\d+)$/.exec(normalizeSize(size) || '');
   return m ? { width: Number(m[1]), height: Number(m[2]) } : null;
+}
+
+const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+
+/**
+ * 写进提示词的尺寸描述（有些中转接口忽略 size 参数，只认提示词里的描述），用界面语言写。
+ * t 是 i18n.mjs 的翻译函数。像素尺寸的约分比例两项都不超过 32 时才写，免得出现 209:118 这种没意义的比例。
+ * 不是像素也不是比例（auto、空、认不出的写法）时返回空串
+ */
+export function sizeHintText(size, t) {
+  const orientation = (d) => t(d.width > d.height ? 'size.landscape' : d.width < d.height ? 'size.portrait' : 'size.square');
+  const ratio = parseRatio(size);
+  if (ratio) return t('size.hintRatio', { ratio: `${ratio.width}:${ratio.height}`, orientation: orientation(ratio) });
+  const d = parseSize(size);
+  if (!d) return '';
+  const g = gcd(d.width, d.height);
+  const [rw, rh] = [d.width / g, d.height / g];
+  const vars = { size: `${d.width}x${d.height}`, orientation: orientation(d), ratio: `${rw}:${rh}` };
+  return t(rw <= 32 && rh <= 32 ? 'size.hintPixelsRatio' : 'size.hintPixels', vars);
 }
 
 // 实际尺寸是否符合请求：像素要完全一致；比例按宽高比比较，允许 2% 误差（模型出图常有零头，比如 16:9 出 1672x941）。

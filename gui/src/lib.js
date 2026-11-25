@@ -28,41 +28,36 @@ export function formatDuration(ms) {
   return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
 }
 
-export function formatClock(ts) {
+// 生成记录的时间：今天的只显示时分，其他日期带上月日（按界面语言的习惯写，24 小时制）
+export function formatClock(ts, locale) {
   const d = new Date(ts);
-  const p = (n) => String(n).padStart(2, '0');
-  const today = new Date();
-  const sameDay = d.toDateString() === today.toDateString();
-  const hm = `${p(d.getHours())}:${p(d.getMinutes())}`;
-  return sameDay ? hm : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const opts = sameDay ? {} : { month: 'short', day: 'numeric' };
+  return new Intl.DateTimeFormat(locale, { ...opts, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(d);
 }
 
-export function relativeTime(ts, now = Date.now()) {
-  const diff = Math.max(0, now - ts);
-  const m = Math.floor(diff / 60000);
-  if (m < 1) return '刚刚';
-  if (m < 60) return `${m} 分钟`;
+// 侧边栏的「多久以前」：5 分钟、3 小时、2 天…（单位的写法和单复数交给 Intl）
+export function relativeTime(ts, now, t) {
+  const unit = (n, u) => new Intl.NumberFormat(t.locale, { style: 'unit', unit: u, unitDisplay: 'short' }).format(n);
+  const m = Math.floor(Math.max(0, now - ts) / 60000);
+  if (m < 1) return t('time.justNow');
+  if (m < 60) return unit(m, 'minute');
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h} 小时`;
+  if (h < 24) return unit(h, 'hour');
   const d = Math.floor(h / 24);
-  if (d < 30) return `${d} 天`;
+  if (d < 30) return unit(d, 'day');
   const mo = Math.floor(d / 30);
-  if (mo < 12) return `${mo} 个月`;
-  return `${Math.floor(mo / 12)} 年`;
+  if (mo < 12) return unit(mo, 'month');
+  return unit(Math.floor(mo / 12), 'year');
 }
 
+// 按时间分组，分组名在界面里用 t(`group.${key}`) 显示
 export function groupSessions(sessions) {
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
   const t0 = startOfToday.getTime();
   const day = 86400000;
-  const groups = [
-    { key: 'today', label: '今天', items: [] },
-    { key: 'yesterday', label: '昨天', items: [] },
-    { key: 'week', label: '近 7 天', items: [] },
-    { key: 'month', label: '近 30 天', items: [] },
-    { key: 'older', label: '更早', items: [] },
-  ];
+  const groups = ['today', 'yesterday', 'week', 'month', 'older'].map((key) => ({ key, items: [] }));
   for (const s of sessions) {
     const t = s.updatedAt;
     if (t >= t0) groups[0].items.push(s);
@@ -80,9 +75,9 @@ export function aspectOf(size) {
   return `${m[1]} / ${m[2]}`;
 }
 
-export function titleFrom(prompt) {
-  const t = String(prompt || '').replace(/\s+/g, ' ').trim();
-  return t.length > 40 ? `${t.slice(0, 40)}…` : t || '新任务';
+export function titleFrom(prompt, t) {
+  const s = String(prompt || '').replace(/\s+/g, ' ').trim();
+  return s.length > 40 ? `${s.slice(0, 40)}…` : s || t('session.untitled');
 }
 
 export function sessionRunning(s) {
@@ -96,26 +91,19 @@ export function runStats(run) {
   return { done, failed, active, total: run.items.length };
 }
 
-export const QUALITY_LABELS = {
-  '': '默认质量',
-  auto: '自动',
-  high: '高',
-  medium: '中',
-  low: '低',
-  hd: 'HD',
-  standard: '标准',
-};
+// 常见的质量值显示成当前语言的说法，其他值原样显示
+const QUALITY_KEYS = { '': 'quality.default', auto: 'quality.auto', high: 'quality.high', medium: 'quality.medium', low: 'quality.low', hd: 'quality.hd', standard: 'quality.standard' };
 
-export function qualityLabel(q) {
-  return QUALITY_LABELS[q] ?? q;
+export function qualityLabel(q, t) {
+  return Object.hasOwn(QUALITY_KEYS, q) ? t(QUALITY_KEYS[q]) : q;
 }
 
 // 尺寸规则和主进程共用一份
-export { isUsableSize, normalizeSize, parseRatio, parseSize, SIZE_FORMAT_HINT, sizeMatches, splitSizeList } from '../shared/size.mjs';
+export { isUsableSize, normalizeSize, parseRatio, parseSize, sizeHintText, sizeMatches, splitSizeList } from '../shared/size.mjs';
 
-export function sizeLabel(s) {
-  if (!s) return '默认尺寸';
-  if (s === 'auto') return '自动尺寸';
+export function sizeLabel(s, t) {
+  if (!s) return t('size.default');
+  if (s === 'auto') return t('size.auto');
   return s;
 }
 

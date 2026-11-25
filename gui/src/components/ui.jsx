@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState, createContext, useContext } from 'react';
 import { Check, ChevronDown, X, CheckCircle2, AlertCircle, Info } from 'lucide-react';
 import { cx } from '../lib.js';
+import { useT } from '../i18n.jsx';
 
 export function useOutsideClose(open, onClose) {
   const ref = useRef(null);
@@ -52,12 +53,13 @@ export function Dropdown({
   placement = 'top',
   align = 'left',
   allowCustom = false,
-  customPlaceholder = '自定义…',
+  customPlaceholder,
   parseCustom, // 可选：校验并规范化自定义值，返回 null 表示不合法
-  customError = '格式不对',
+  customError,
   className,
   footer,
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [custom, setCustom] = useState('');
   const [customErr, setCustomErr] = useState('');
@@ -111,7 +113,7 @@ export function Dropdown({
                 if (!raw) return;
                 const v = parseCustom ? parseCustom(raw) : raw;
                 if (v === null || v === undefined || v === '') {
-                  setCustomErr(customError);
+                  setCustomErr(customError || t('common.badFormat'));
                   return;
                 }
                 pick(v);
@@ -125,7 +127,7 @@ export function Dropdown({
                   setCustom(e.target.value);
                   setCustomErr('');
                 }}
-                placeholder={customPlaceholder}
+                placeholder={customPlaceholder || t('common.customPlaceholder')}
                 aria-invalid={Boolean(customErr)}
               />
               {customErr && <div className="menu-custom-error">{customErr}</div>}
@@ -163,6 +165,7 @@ export function Switch({ checked, onChange, label, disabled }) {
 }
 
 export function Modal({ title, children, footer, onClose, width = 520, className }) {
+  const t = useT();
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape') onClose?.();
@@ -175,7 +178,7 @@ export function Modal({ title, children, footer, onClose, width = 520, className
       <div className={cx('modal', className)} style={{ width }} role="dialog" aria-modal="true">
         <div className="modal-head">
           <h3>{title}</h3>
-          <IconButton title="关闭" size="sm" onClick={onClose}>
+          <IconButton title={t('common.close')} size="sm" onClick={onClose}>
             <X size={16} />
           </IconButton>
         </div>
@@ -186,7 +189,8 @@ export function Modal({ title, children, footer, onClose, width = 520, className
   );
 }
 
-export function ConfirmDialog({ title, message, confirmText = '确定', danger, onConfirm, onCancel }) {
+export function ConfirmDialog({ title, message, confirmText, danger, onConfirm, onCancel }) {
+  const t = useT();
   return (
     <Modal
       title={title}
@@ -195,10 +199,10 @@ export function ConfirmDialog({ title, message, confirmText = '确定', danger, 
       footer={
         <>
           <button type="button" className="btn" onClick={onCancel}>
-            取消
+            {t('common.cancel')}
           </button>
           <button type="button" className={cx('btn', danger ? 'btn-danger' : 'btn-primary')} onClick={onConfirm} autoFocus>
-            {confirmText}
+            {confirmText || t('common.ok')}
           </button>
         </>
       }

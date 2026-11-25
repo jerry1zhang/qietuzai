@@ -5,45 +5,9 @@ import Workspace from './components/Workspace.jsx';
 import SettingsPage from './components/Settings.jsx';
 import Lightbox from './components/Lightbox.jsx';
 import { ConfirmDialog, Modal, ToastProvider, useToast } from './components/ui.jsx';
-import { api, isUsableSize, titleFrom } from './lib.js';
-
-function draftFromSettings(s) {
-  return {
-    prompt: '',
-    attachments: [],
-    maskPath: null,
-    model: s.defaultModel,
-    size: s.defaultSize,
-    quality: s.defaultQuality,
-    count: s.defaultCount,
-    outName: '',
-    perLine: false,
-  };
-}
-
-const PARAM_KEYS = [
-  ['model', 'defaultModel'],
-  ['size', 'defaultSize'],
-  ['quality', 'defaultQuality'],
-  ['count', 'defaultCount'],
-];
-
-// 把生成参数换成设置里的默认值，保留已输入的提示词和参考图
-function withDefaults(d, s) {
-  const next = { ...d };
-  for (const [k, sk] of PARAM_KEYS) next[k] = s[sk];
-  return next;
-}
-
-// 保存设置后：草稿里还是旧默认值（没被手动改过）的参数，跟着换成新默认值
-function followDefaults(d, prev, s) {
-  const next = { ...d };
-  for (const [k, sk] of PARAM_KEYS) if (d[k] === prev[sk]) next[k] = s[sk];
-  return next;
-}
-
-// 草稿的尺寸是不是「编辑后重试」从历史记录带过来、而且没改过的：是的话，旧版本存下的写法也原样发送
-const sizeFromHistory = (d) => d.historySize != null && d.size === d.historySize;
+import { api, titleFrom } from './lib.js';
+import { draftAfterSettingsSaved, draftFromSettings, sizeFromHistory, withDefaults } from './draft.mjs';
+import { createTranslator, I18nProvider, resolveLocale, useT } from './i18n.jsx';
 
 function upsert(list, s) {
   const next = list.filter((x) => x.id !== s.id);
@@ -53,9 +17,10 @@ function upsert(list, s) {
 
 function RequestPreview({ data, onClose }) {
   const toast = useToast();
+  const t = useT();
   return (
     <Modal
-      title="请求预览（dry-run）"
+      title={t('app.previewTitle')}
       onClose={onClose}
       width={680}
       footer={
@@ -65,13 +30,13 @@ function RequestPreview({ data, onClose }) {
             className="btn"
             onClick={async () => {
               await api.files.copyText(data.text);
-              toast.success('已复制');
+              toast.success(t('common.copied'));
             }}
           >
-            <Copy size={14} /> 复制
+            <Copy size={14} /> {t('common.copy')}
           </button>
           <button type="button" className="btn btn-primary" onClick={onClose}>
-            关闭
+            {t('common.close')}
           </button>
         </>
       }
@@ -94,6 +59,13 @@ function AppInner() {
   const [preview, setPreview] = useState(null);
   const [confirm, setConfirm] = useState(null);
   const settingsDirty = useRef(false);
+
+  // 界面语言：设置里选的，或者跟随系统（主进程给出系统语言列表，还没拿到时先用浏览器的）
+  const locale = resolveLocale(settings?.language, appInfo?.systemLanguages || navigator.languages);
+  const t = useMemo(() => createTranslator(locale), [locale]);
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
 
   useEffect(() => {
     (async () => {
@@ -119,12 +91,6 @@ function AppInner() {
     };
   }, [toast]);
 
-  // 设置里删掉了当前选中的模型时，回退到默认模型
-  useEffect(() => {
-    if (!settings) return;
-    setDraft((d) => (d && !settings.models.includes(d.model) ? { ...d, model: settings.defaultModel } : d));
-  }, [settings]);
-
   const activeSession = useMemo(() => sessions.find((s) => s.id === activeId) || null, [sessions, activeId]);
 
   const ask = (opts) =>
@@ -145,7 +111,7 @@ function AppInner() {
   // 离开设置页时检查未保存修改
   const leaveSettings = async () => {
     if (view === 'settings' && settingsDirty.current) {
-      const ok = await ask({ title: '放弃未保存的修改？', message: '设置页还有修改没有保存。', confirmText: '放弃修改', danger: true });
+      const ok = await ask({ title: t('app.discardTitle'), message: t('app.discardMessage'), confirmText: t('app.discardConfirm'), danger: true });
       if (!ok) return false;
       settingsDirty.current = false;
     }
@@ -169,12 +135,9 @@ function AppInner() {
     const prev = settings;
     setSettings(next);
     if (!prev || !draft) return;
-    let d = followDefaults(draft, prev, next);
-    // 草稿正在用的尺寸被从可选列表删掉、又不是标准写法时，切回默认尺寸，免得预览和提交报错
-    if (!isUsableSize(d.size, next, { fromHistory: sizeFromHistory(d) })) {
-      toast.info(`尺寸「${d.size}」已经不在可选列表里，输入框改回默认尺寸 ${next.defaultSize || '（不指定）'}`);
-      d = { ...d, size: next.defaultSize };
-    }
+    // 跟着新默认值走；删掉的模型、不能再用的尺寸换回默认（规则见 draft.mjs）
+    const { draft: d, droppedSize } = draftAfterSettingsSaved(draft, prev, next);
+    if (droppedSize !== null) toast.info(t('app.sizeReset', { size: droppedSize, fallback: next.defaultSize || t('size.none') }));
     setDraft(d);
   };
 
@@ -209,14 +172,14 @@ function AppInner() {
     const text = draft.prompt.trim();
     if (!text) return;
     if (!settings.apiUrl || !settings.apiKey) {
-      toast.error('请先在设置中配置接口地址和 API Key');
+      toast.error(t('app.needConfig'));
       setView('settings');
       return;
     }
     const prompts = draft.perLine ? text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean) : [text];
     const { mask, inputs } = splitAttachments(draft);
     if (mask && !inputs.length) {
-      toast.error('蒙版需要配合至少一张原图使用');
+      toast.error(t('app.maskNeedsInput'));
       return;
     }
     const params = {
@@ -234,7 +197,7 @@ function AppInner() {
     try {
       let sid = activeId;
       if (!sid) {
-        const s = await api.history.create(titleFrom(prompts[0]));
+        const s = await api.history.create(titleFrom(prompts[0], t));
         sid = s.id;
         setActiveId(sid);
       }
@@ -319,9 +282,9 @@ function AppInner() {
 
   const deleteRun = async (run) => {
     const ok = await ask({
-      title: '删除这条生成记录？',
-      message: '只删除历史记录，已经保存到磁盘的图片不会被删除。',
-      confirmText: '删除',
+      title: t('app.deleteRunTitle'),
+      message: t('app.deleteRunMessage'),
+      confirmText: t('common.delete'),
       danger: true,
     });
     if (ok) api.history.removeRun(run.sessionId, run.id).catch((e) => toast.error(e.message));
@@ -329,9 +292,9 @@ function AppInner() {
 
   const deleteSession = async (s) => {
     const ok = await ask({
-      title: '删除任务？',
-      message: `「${s.title}」及其中的 ${s.runs.length} 条生成记录会被删除，已保存的图片文件不会被删除。`,
-      confirmText: '删除',
+      title: t('app.deleteSessionTitle'),
+      message: t('app.deleteSessionMessage', { title: s.title, count: s.runs.length }),
+      confirmText: t('common.delete'),
       danger: true,
     });
     if (ok) api.history.remove(s.id).catch((e) => toast.error(e.message));
@@ -342,7 +305,7 @@ function AppInner() {
       const a = await api.files.importImagePath(p);
       setDraft((d) => (d.attachments.some((x) => x.path === a.path) ? d : { ...d, attachments: [...d.attachments, a] }));
       if (view !== 'work') setView('work');
-      toast.info('已添加为参考图');
+      toast.info(t('app.addedAsRef'));
     } catch (e) {
       toast.error(e.message);
     }
@@ -353,54 +316,58 @@ function AppInner() {
   if (!settings || !draft) return <div className="boot" />;
 
   return (
-    <div className="app">
-      <Sidebar
-        sessions={sessions}
-        activeId={activeId}
-        view={view}
-        onSelect={goSession}
-        onNew={newTask}
-        onRename={(id, t) => api.history.rename(id, t).catch((e) => toast.error(e.message))}
-        onDelete={deleteSession}
-        onOpenSettings={openSettings}
-        onOpenOutput={openOutput}
-      />
-
-      {view === 'settings' ? (
-        <SettingsPage
-          settings={settings}
-          appInfo={appInfo}
-          onSaved={onSettingsSaved}
-          onDirtyChange={(d) => {
-            settingsDirty.current = d;
-          }}
-          onBack={async () => {
-            if (await leaveSettings()) setView('work');
-          }}
-        />
-      ) : (
-        <Workspace
-          session={activeSession}
-          settings={settings}
-          draft={draft}
-          setDraft={setDraft}
-          onSubmit={submit}
-          onPreviewRequest={previewDraft}
-          onRunPreview={previewRun}
-          onOpenImage={(paths, index) => paths.length && setLightbox({ paths, index: Math.max(0, index) })}
-          onUseAsRef={useAsRef}
-          onRerun={rerun}
-          onEditRun={editRun}
-          onDeleteRun={deleteRun}
+    <I18nProvider t={t}>
+      <div className="app">
+        <Sidebar
+          sessions={sessions}
+          activeId={activeId}
+          view={view}
+          onSelect={goSession}
+          onNew={newTask}
+          onRename={(id, t) => api.history.rename(id, t).catch((e) => toast.error(e.message))}
+          onDelete={deleteSession}
           onOpenSettings={openSettings}
           onOpenOutput={openOutput}
         />
-      )}
 
-      {lightbox && <Lightbox {...lightbox} onClose={() => setLightbox(null)} onUseAsRef={useAsRef} />}
-      {preview && <RequestPreview data={preview} onClose={() => setPreview(null)} />}
-      {confirm && <ConfirmDialog {...confirm} />}
-    </div>
+        {view === 'settings' ? (
+          <SettingsPage
+            settings={settings}
+            appInfo={appInfo}
+            onSaved={onSettingsSaved}
+          // 只切换语言：只更新语言，不重算输入框草稿（保存回调可能比用户回到工作区继续输入还晚到）
+          onLanguageSaved={(language) => setSettings((s) => ({ ...s, language }))}
+            onDirtyChange={(d) => {
+              settingsDirty.current = d;
+            }}
+            onBack={async () => {
+              if (await leaveSettings()) setView('work');
+            }}
+          />
+        ) : (
+          <Workspace
+            session={activeSession}
+            settings={settings}
+            draft={draft}
+            setDraft={setDraft}
+            onSubmit={submit}
+            onPreviewRequest={previewDraft}
+            onRunPreview={previewRun}
+            onOpenImage={(paths, index) => paths.length && setLightbox({ paths, index: Math.max(0, index) })}
+            onUseAsRef={useAsRef}
+            onRerun={rerun}
+            onEditRun={editRun}
+            onDeleteRun={deleteRun}
+            onOpenSettings={openSettings}
+            onOpenOutput={openOutput}
+          />
+        )}
+
+        {lightbox && <Lightbox {...lightbox} onClose={() => setLightbox(null)} onUseAsRef={useAsRef} />}
+        {preview && <RequestPreview data={preview} onClose={() => setPreview(null)} />}
+        {confirm && <ConfirmDialog {...confirm} />}
+      </div>
+    </I18nProvider>
   );
 }
 

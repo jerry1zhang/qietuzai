@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { api, aspectOf, basename, cx, fileUrl, formatClock, formatDuration, parseRatio, parseSize, qualityLabel, runStats, sizeLabel, sizeMatches } from '../lib.js';
 import { IconButton, useToast } from './ui.jsx';
+import { useT } from '../i18n.jsx';
 
 function useNow(active) {
   const [now, setNow] = useState(Date.now());
@@ -44,6 +45,7 @@ const isMismatch = (requestedSize, dims) => sizeMatches(requestedSize, dims) ===
 
 function Tile({ item, aspect, now, requestedSize, dims, onDims, onOpen, onUseAsRef }) {
   const toast = useToast();
+  const t = useT();
   const [broken, setBroken] = useState(false);
 
   if (item.status === 'done' && item.path) {
@@ -51,7 +53,7 @@ function Tile({ item, aspect, now, requestedSize, dims, onDims, onOpen, onUseAsR
       return (
         <div className="tile tile-state" style={{ aspectRatio: aspect }}>
           <ImageOff size={20} />
-          <span>文件已被移动或删除</span>
+          <span>{t('run.fileMissing')}</span>
           <span className="tile-path">{basename(item.path)}</span>
         </div>
       );
@@ -76,7 +78,7 @@ function Tile({ item, aspect, now, requestedSize, dims, onDims, onOpen, onUseAsR
           e.preventDefault();
           api.files.startDrag(item.path);
         }}
-        title={`${basename(item.path)}（可直接拖到其他软件）`}
+        title={t('run.dragTitle', { name: basename(item.path) })}
       >
         <img
           src={fileUrl(item.path)}
@@ -91,8 +93,8 @@ function Tile({ item, aspect, now, requestedSize, dims, onDims, onOpen, onUseAsR
             className={cx('tile-dim', mismatch && 'is-warn')}
             title={
               mismatch
-                ? `请求的是 ${requestedSize}，接口实际返回 ${dims.width}x${dims.height}`
-                : `实际尺寸 ${dims.width}x${dims.height}`
+                ? t('run.sizeMismatch', { requested: requestedSize, actual: `${dims.width}x${dims.height}` })
+                : t('run.actualSize', { size: `${dims.width}x${dims.height}` })
             }
           >
             {mismatch && <AlertTriangle size={11} />}
@@ -100,16 +102,16 @@ function Tile({ item, aspect, now, requestedSize, dims, onDims, onOpen, onUseAsR
           </span>
         )}
         <div className="tile-tools">
-          <IconButton size="sm" title="作为参考图" onClick={act(onUseAsRef)}>
+          <IconButton size="sm" title={t('action.useAsRef')} onClick={act(onUseAsRef)}>
             <ImagePlus size={14} />
           </IconButton>
-          <IconButton size="sm" title="复制图片" onClick={act(() => api.files.copyImage(item.path), '已复制到剪贴板')}>
+          <IconButton size="sm" title={t('action.copyImage')} onClick={act(() => api.files.copyImage(item.path), t('common.copiedToClipboard'))}>
             <Copy size={14} />
           </IconButton>
-          <IconButton size="sm" title="在文件夹中显示" onClick={act(() => api.files.reveal(item.path))}>
+          <IconButton size="sm" title={t('action.reveal')} onClick={act(() => api.files.reveal(item.path))}>
             <FolderOpen size={14} />
           </IconButton>
-          <IconButton size="sm" title="另存为…" onClick={act(() => api.files.saveAs(item.path), '已保存')}>
+          <IconButton size="sm" title={t('action.saveAsEllipsis')} onClick={act(() => api.files.saveAs(item.path), t('common.saved'))}>
             <Download size={14} />
           </IconButton>
         </div>
@@ -129,10 +131,10 @@ function Tile({ item, aspect, now, requestedSize, dims, onDims, onOpen, onUseAsR
           className="link-btn"
           onClick={async () => {
             await api.files.copyText(item.error);
-            toast.success('已复制错误信息');
+            toast.success(t('run.copiedError'));
           }}
         >
-          复制错误
+          {t('run.copyError')}
         </button>
       </div>
     );
@@ -142,7 +144,7 @@ function Tile({ item, aspect, now, requestedSize, dims, onDims, onOpen, onUseAsR
     return (
       <div className="tile tile-state" style={{ aspectRatio: aspect }}>
         <Ban size={18} />
-        <span>已取消</span>
+        <span>{t('run.canceled')}</span>
       </div>
     );
   }
@@ -152,45 +154,42 @@ function Tile({ item, aspect, now, requestedSize, dims, onDims, onOpen, onUseAsR
     <div className="tile tile-state tile-pending" style={{ aspectRatio: aspect }}>
       <div className="shimmer" />
       {running ? <Loader2 size={20} className="spin" /> : <Clock3 size={18} />}
-      <span>{running ? `生成中 ${formatDuration(Math.max(0, now - (item.startedAt || now)))}` : '排队中'}</span>
+      <span>{running ? t('run.generating', { time: formatDuration(Math.max(0, now - (item.startedAt || now))) }) : t('run.queued')}</span>
     </div>
   );
 }
 
-function statusText(run, stats, now) {
+const STATUS = {
+  running: ['is-running', 'run.statusRunning'],
+  done: ['is-done', 'run.statusDone'],
+  partial: ['is-partial', 'run.statusPartial'],
+  canceled: ['is-muted', 'run.statusCanceled'],
+  interrupted: ['is-error', 'run.statusInterrupted'],
+  error: ['is-error', 'run.statusFailed'],
+};
+
+function statusText(run, stats, now, t) {
   const elapsed = formatDuration((run.finishedAt || now) - run.createdAt);
-  switch (run.status) {
-    case 'running':
-      return { cls: 'is-running', text: `生成中 ${stats.done}/${stats.total} · ${elapsed}` };
-    case 'done':
-      return { cls: 'is-done', text: `完成 ${stats.done}/${stats.total} · ${elapsed}` };
-    case 'partial':
-      return { cls: 'is-partial', text: `部分完成 ${stats.done}/${stats.total} · ${elapsed}` };
-    case 'canceled':
-      return { cls: 'is-muted', text: `已取消 · ${stats.done}/${stats.total}` };
-    case 'interrupted':
-      return { cls: 'is-error', text: `已中断 · ${stats.done}/${stats.total}` };
-    default:
-      return { cls: 'is-error', text: `失败 0/${stats.total} · ${elapsed}` };
-  }
+  // 认不出的状态（包括 constructor 这类对象原型上的名字）都按失败显示
+  const [cls, key] = Object.hasOwn(STATUS, run.status) ? STATUS[run.status] : STATUS.error;
+  return { cls, text: t(key, { done: stats.done, total: stats.total, elapsed }) };
 }
 
-function mismatchNote(run, requested, list) {
+function mismatchNote(run, requested, list, t) {
   const sameOrientation = list.every((d) => Math.sign(d.width - d.height) === Math.sign(requested.width - requested.height));
-  const actual = [...new Set(list.map((d) => `${d.width}x${d.height}`))].join('、');
-  const head = `请求的是 ${run.size}，接口实际返回 ${actual}。`;
-  const tail = run.sizeHint
-    ? '这次已经把尺寸写进了提示词，模型也只是大致照做。这个接口似乎不支持精确控制尺寸，需要的话请在本地裁剪或缩放。'
-    : '这个接口可能忽略了 size 参数。可以在设置里打开「把尺寸写进提示词」试试（点击前往设置）。';
-  return { label: sameOrientation ? '尺寸有偏差' : '尺寸未生效', text: head + tail };
+  const actual = [...new Set(list.map((d) => `${d.width}x${d.height}`))].join(t('common.listSep'));
+  const head = t('run.mismatchHead', { requested: run.size, actual });
+  const tail = t(run.sizeHint ? 'run.mismatchHinted' : 'run.mismatchSuggest');
+  return { label: t(sameOrientation ? 'run.sizeOff' : 'run.sizeIgnored'), text: head + tail };
 }
 
 export default function RunCard({ run, onRerun, onEdit, onDelete, onOpenImage, onUseAsRef, onPreviewRequest, onOpenSettings }) {
   const toast = useToast();
+  const t = useT();
   const isRunning = run.status === 'running';
   const now = useNow(isRunning);
   const stats = runStats(run);
-  const st = statusText(run, stats, now);
+  const st = statusText(run, stats, now, t);
   const [expanded, setExpanded] = useState(false);
   const long = run.prompt.length > 220 || run.prompt.split('\n').length > 5;
   const aspect = aspectOf(run.size);
@@ -202,7 +201,7 @@ export default function RunCard({ run, onRerun, onEdit, onDelete, onOpenImage, o
   const onDims = (index, width, height) =>
     setLoadedDims((m) => (m[index]?.width === width && m[index]?.height === height ? m : { ...m, [index]: { width, height } }));
   const mismatched = doneItems.map((it) => itemDims(it, loadedDims[it.index])).filter((d) => isMismatch(run.size, d));
-  const note = mismatched.length ? mismatchNote(run, requested, mismatched) : null;
+  const note = mismatched.length ? mismatchNote(run, requested, mismatched, t) : null;
   const refs = [...run.inputs, ...(run.mask ? [{ ...run.mask, isMask: true }] : [])];
 
   return (
@@ -216,10 +215,10 @@ export default function RunCard({ run, onRerun, onEdit, onDelete, onOpenImage, o
                 key={f.path + i}
                 className={cx('run-ref', f.isMask && 'is-mask')}
                 onClick={() => onOpenImage(refs.map((x) => x.path), i)}
-                title={f.isMask ? `蒙版：${f.name}` : f.name}
+                title={f.isMask ? t('run.maskTitle', { name: f.name }) : f.name}
               >
                 <img src={fileUrl(f.path)} alt="" loading="lazy" />
-                {f.isMask && <span>蒙版</span>}
+                {f.isMask && <span>{t('composer.mask')}</span>}
               </button>
             ))}
           </div>
@@ -230,17 +229,17 @@ export default function RunCard({ run, onRerun, onEdit, onDelete, onOpenImage, o
             <button type="button" className="link-btn bubble-more" onClick={() => setExpanded((v) => !v)}>
               {expanded ? (
                 <>
-                  收起 <ChevronUp size={12} />
+                  {t('run.collapse')} <ChevronUp size={12} />
                 </>
               ) : (
                 <>
-                  展开 <ChevronDown size={12} />
+                  {t('run.expand')} <ChevronDown size={12} />
                 </>
               )}
             </button>
           )}
         </div>
-        <div className="run-time">{formatClock(run.createdAt)}</div>
+        <div className="run-time">{formatClock(run.createdAt, t.locale)}</div>
       </div>
 
       <div className="run-result">
@@ -250,14 +249,14 @@ export default function RunCard({ run, onRerun, onEdit, onDelete, onOpenImage, o
             {st.text}
           </span>
           <span className="meta-sep" />
-          <span className="chip">{run.mode === 'edit' ? '图生图' : '文生图'}</span>
+          <span className="chip">{t(run.mode === 'edit' ? 'mode.edit' : 'mode.generate')}</span>
           <span className="chip">{run.model}</span>
-          <span className="chip">{sizeLabel(run.size)}</span>
-          {run.quality && <span className="chip">{qualityLabel(run.quality)}</span>}
+          <span className="chip">{sizeLabel(run.size, t)}</span>
+          {run.quality && <span className="chip">{qualityLabel(run.quality, t)}</span>}
           <span className="chip">× {run.count}</span>
           {run.sizeHint && (
-            <span className="chip" title={`提示词末尾加了：${run.sizeHint}`}>
-              <Ruler size={11} /> 尺寸写入提示词
+            <span className="chip" title={t('run.sizeHintTitle', { hint: run.sizeHint })}>
+              <Ruler size={11} /> {t('composer.sizeInPrompt')}
             </span>
           )}
           {note && (
@@ -296,36 +295,36 @@ export default function RunCard({ run, onRerun, onEdit, onDelete, onOpenImage, o
         <div className="run-actions">
           {isRunning ? (
             <button type="button" className="act-btn" onClick={() => api.gen.cancel(run.id)}>
-              <Square size={13} /> 停止
+              <Square size={13} /> {t('run.stop')}
             </button>
           ) : (
-            <button type="button" className="act-btn" onClick={onRerun} title="用同样的参数再生成一组">
-              <RotateCcw size={13} /> 重新生成
+            <button type="button" className="act-btn" onClick={onRerun} title={t('run.rerunTitle')}>
+              <RotateCcw size={13} /> {t('run.rerun')}
             </button>
           )}
-          <button type="button" className="act-btn" onClick={onEdit} title="把提示词、参考图和参数填回输入框">
-            <PencilLine size={13} /> 编辑后重试
+          <button type="button" className="act-btn" onClick={onEdit} title={t('run.editTitle')}>
+            <PencilLine size={13} /> {t('run.edit')}
           </button>
           <button
             type="button"
             className="act-btn"
             onClick={async () => {
               await api.files.copyText(run.prompt);
-              toast.success('已复制提示词');
+              toast.success(t('run.copiedPrompt'));
             }}
           >
-            <Copy size={13} /> 复制提示词
+            <Copy size={13} /> {t('run.copyPrompt')}
           </button>
-          <button type="button" className="act-btn" onClick={onPreviewRequest} title="查看这次实际发送的请求">
-            <FileCode2 size={13} /> 请求详情
+          <button type="button" className="act-btn" onClick={onPreviewRequest} title={t('run.detailsTitle')}>
+            <FileCode2 size={13} /> {t('run.details')}
           </button>
           {doneItems.length > 0 && (
             <button type="button" className="act-btn" onClick={() => api.files.reveal(doneItems[0].path)}>
-              <FolderOpen size={13} /> 打开目录
+              <FolderOpen size={13} /> {t('run.openDir')}
             </button>
           )}
           <span className="flex-1" />
-          <button type="button" className="act-btn act-danger" onClick={onDelete} title="删除这条记录（不会删除图片文件）">
+          <button type="button" className="act-btn act-danger" onClick={onDelete} title={t('run.deleteTitle')}>
             <Trash2 size={13} />
           </button>
         </div>

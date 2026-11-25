@@ -2,6 +2,8 @@
 
 `img.sh` 的桌面版，支持 macOS / Windows / Linux。基于 Electron + React + Vite。
 
+这里是开发文档。使用说明见仓库根目录的 [README](../README.md)（[简体中文](../docs/README.zh-CN.md)）。
+
 ![](build/icon.png)
 
 ## 功能
@@ -43,6 +45,7 @@
 - **把尺寸写进提示词**：有些中转接口会忽略 `size` 参数（比如用 ChatGPT / Codex 账号池代调的渠道），生成的图和选的尺寸对不上。打开后会在提示词末尾加上「输出图片尺寸为 1536x1024（横版，3:2）」这样的描述，`size` 参数照常发送。这种渠道下模型通常只能大致照做，精确尺寸需要在本地裁剪。
 - **Agents 提示词**：开启后，每次请求都会把这段内容加在提示词最前面，中间空一行。生成记录上会显示 `Agents` 标签，悬停可以看到实际发送的完整提示词。
 - 图片保存目录（默认 `~/Pictures/切图仔`）、主题（跟随系统 / 浅色 / 深色）。
+- 界面语言：简体中文、繁體中文、English、日本語、한국어、Español、Français、Deutsch、Português、Русский，默认跟随系统。选了立即生效，不用点保存。
 
 接口行为与 `img.sh` 保持一致：
 
@@ -64,7 +67,9 @@ npm test             # 单元测试，不调用真实接口
 测试在 `test/` 目录，用的是 Node 自带的 `node:test`：
 
 - `generator.test.js`：并发上限、取消、各种响应格式和无效响应、请求体、输出命名。
-- `store.test.js`：历史记录的持久化和中断恢复。
+- `store.test.js`：历史记录的持久化和中断恢复，两次保存设置交错时不会互相覆盖。
+- `draft.test.js`：保存设置后输入框草稿怎么跟着变（`src/draft.mjs`）。
+- `i18n.test.js`：每种语言的键、占位符和复数形式是否齐全，系统语言能否对应到支持的语言。
 - `imgsh.test.js`：在本地起一个假接口，实际运行 `img.sh`。只在 Linux 上跑，需要 bash、curl、jq。
 
 CI 会在打包前先跑一遍测试。
@@ -112,6 +117,17 @@ npm run dist:mac
 
 - `package.json` 里的 `homepage` 不能删，打 deb 包时必须有这个字段。
 
+## 多语言
+
+界面文字都在 `shared/locales/` 下，键以 `zh-CN.mjs` 为准：
+
+- 加新文字：先在 `zh-CN.mjs` 里加键，再给其他 9 个文件补上翻译。界面里用 `const t = useT()` 取翻译函数，主进程直接用 `i18n.mjs` 导出的 `t`。
+- 占位符写成 `{name}`，调用时 `t('key', { name })`。
+- 跟数量有关的文字写成 `{ one: '…', other: '…' }`（俄语还要 `few`、`many`），调用时传 `count`。
+- `npm test` 会检查每种语言的键、占位符和复数形式有没有缺。
+
+主进程的报错、对话框标题、写进提示词的尺寸描述也跟界面用同一种语言（`main.js` 里的 `applyLanguage()`）。历史记录里已经存下的错误信息不会跟着换语言。
+
 ## 网络问题
 
 Electron 二进制默认从 GitHub 下载。Node 自带的 fetch 不会读取 `HTTPS_PROXY`，有代理时可以这样装：
@@ -131,7 +147,8 @@ gui/
 │   ├── generator.js   # 生图核心逻辑（从 img.sh 移植）
 │   ├── store.js       # 设置 / 历史记录持久化
 │   └── preload.js     # 暴露给页面的 window.api
-├── shared/            # 主进程和界面共用的规则（尺寸写法）
+├── shared/            # 主进程和界面共用：尺寸写法规则、多语言（i18n.mjs）
+│   └── locales/       # 各语言的界面文字，一种语言一个文件
 ├── test/              # 单元测试（npm test）
 ├── src/               # React 界面
 │   ├── App.jsx

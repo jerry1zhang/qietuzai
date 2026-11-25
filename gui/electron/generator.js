@@ -7,7 +7,9 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { net } = require('electron');
-const { isUsableSize, normalizeSize, parseSize, parseRatio, SIZE_FORMAT_HINT } = require('../shared/size.mjs');
+const { isUsableSize, normalizeSize, parseSize, parseRatio, sizeHintText: describeSize } = require('../shared/size.mjs');
+// 报错和写进提示词的尺寸描述用当前界面语言（main.js 启动时和保存设置后设置）
+const { t } = require('../shared/i18n.mjs');
 
 const MAX_COUNT = 20;
 
@@ -35,21 +37,8 @@ function endpointFor(settings, isEdit) {
 }
 
 // ---------- 尺寸 ----------
-const gcd = (a, b) => (b ? gcd(b, a % b) : a);
-
-const orientationOf = (d) => (d.width > d.height ? '横版' : d.width < d.height ? '竖版' : '正方形');
-
 // 写进提示词的尺寸描述：有些中转接口忽略 size 参数，只认提示词里的描述
-function sizeHintText(size) {
-  const ratio = parseRatio(size);
-  if (ratio) return `输出图片比例为 ${ratio.width}:${ratio.height}（${orientationOf(ratio)}）。`;
-  const d = parseSize(size);
-  if (!d) return '';
-  const g = gcd(d.width, d.height);
-  const [rw, rh] = [d.width / g, d.height / g];
-  const simple = rw <= 32 && rh <= 32 ? `，${rw}:${rh}` : '';
-  return `输出图片尺寸为 ${d.width}x${d.height}（${orientationOf(d)}${simple}）。`;
-}
+const sizeHintText = (size) => describeSize(size, t);
 
 /**
  * 这次请求实际用的 size。
@@ -63,7 +52,7 @@ function resolveRunSize(settings, input, { fromHistory = false } = {}) {
   const size = normalizeSize(raw);
   if (size !== null) return size;
   if (isUsableSize(raw, settings)) return raw; // 设置里保存着的非标准写法
-  throw new Error(`尺寸格式不对：${raw}。${SIZE_FORMAT_HINT}`);
+  throw new Error(t('size.badFormat', { size: raw, hint: t('size.formatHint') }));
 }
 
 function applyAgents(settings, prompt) {
@@ -172,7 +161,7 @@ function decodeBase64(text) {
     .replace(/^data:[^;,]+;base64,/, '')
     .replace(/\s+/g, '');
   if (!clean || clean.length % 4 === 1 || !/^[A-Za-z0-9+/_-]+={0,2}$/.test(clean)) {
-    throw new Error(`返回的 base64 数据无效: ${truncate(clean, 60)}`);
+    throw new Error(t('gen.badBase64', { data: truncate(clean, 60) }));
   }
   return Buffer.from(clean, /[-_]/.test(clean) ? 'base64url' : 'base64');
 }
@@ -232,7 +221,7 @@ function encodeMultipart(parts) {
 // 输入框里的草稿：按当前设置规范化尺寸、拼出实际提示词。
 // 历史记录的「请求详情」（带 finalPrompt）：原样使用当时记录的 size 和提示词，不按现在的规则改写。
 function preparePreview(settings, params) {
-  const prompt = String(params.prompt || '').trim() || '（提示词）';
+  const prompt = String(params.prompt || '').trim() || t('gen.previewPrompt');
   const base = { ...params, prompt, count: Number(params.count) || 1, inputs: params.inputs || [], mask: params.mask || null };
   if (params.finalPrompt) return { ...base, size: params.size ?? '' };
   const size = resolveRunSize(settings, params.size, { fromHistory: Boolean(params.fromHistory) });
@@ -245,7 +234,7 @@ function previewRequest(settings, run) {
   const { model, size, quality } = scalarParams(run);
   const lines = [];
   lines.push(`POST ${url}`);
-  lines.push(`Authorization: Bearer ${maskKey(settings.apiKey) || '(未设置)'}`);
+  lines.push(`Authorization: Bearer ${maskKey(settings.apiKey) || t('gen.notSet')}`);
   lines.push('Accept: application/json');
   if (!isEdit) {
     lines.push('Content-Type: application/json');
@@ -267,7 +256,12 @@ function previewRequest(settings, run) {
     if (quality) lines.push(`quality=${quality}`);
   }
   const jobs = Math.max(1, Math.min(Number(settings.concurrency) || 5, MAX_COUNT));
-  const summary = `${isEdit ? '图生图' : '文生图'} | 共 ${run.count} 次请求（每次 n=1）| 并发上限 ${jobs}（所有任务共用）| 超时 ${settings.timeoutSec || 600}s`;
+  const summary = t('gen.previewSummary', {
+    mode: t(isEdit ? 'mode.edit' : 'mode.generate'),
+    count: run.count,
+    jobs,
+    timeout: settings.timeoutSec || 600,
+  });
   return { summary, text: lines.join('\n') };
 }
 
@@ -323,10 +317,10 @@ async function writeUnique(plan, index, count, bytes) {
       if (e.code === 'EEXIST') continue;
       // 文件是这次新建的，写一半失败时删掉，不留下残缺图片
       await fsp.rm(candidate, { force: true }).catch(() => {});
-      throw new Error(`保存图片失败: ${e.message}`);
+      throw new Error(t('gen.saveFailed', { error: e.message }));
     }
   }
-  throw new Error(`保存图片失败: ${stem} 的同名文件太多`);
+  throw new Error(t('gen.tooManySameName', { name: stem }));
 }
 
 // 所有任务共用的并发上限（设置里的「并发数」），按提交顺序排队
@@ -344,13 +338,13 @@ class Limiter {
   acquire(signal) {
     return new Promise((resolve, reject) => {
       if (signal.aborted) {
-        reject(new Error('已取消'));
+        reject(new Error(t('gen.canceled')));
         return;
       }
       const entry = { resolve, signal, onAbort: null };
       entry.onAbort = () => {
         this.queue = this.queue.filter((x) => x !== entry);
-        reject(new Error('已取消'));
+        reject(new Error(t('gen.canceled')));
       };
       signal.addEventListener('abort', entry.onAbort, { once: true });
       this.queue.push(entry);
@@ -410,8 +404,8 @@ function describeHttpError(status, text, json) {
 }
 
 function abortReason(signal, timeoutSec) {
-  if (signal.reason?.name === 'TimeoutError') return `请求超时（${timeoutSec}s）`;
-  return '已取消';
+  if (signal.reason?.name === 'TimeoutError') return t('gen.timeout', { sec: timeoutSec });
+  return t('gen.canceled');
 }
 
 // 默认用 Electron 的网络栈（跟随系统代理）；测试时可以换成假的 fetch
@@ -424,15 +418,15 @@ async function fetchOnce({ url, headers, body, signal, timeoutSec, fetchImpl = d
   try {
     res = await fetchImpl(url, { method: 'POST', headers, body, signal: combined });
   } catch (e) {
-    if (combined.aborted) throw new Error(signal.aborted ? '已取消' : `请求超时（${timeoutSec}s）`);
-    throw new Error(`请求失败: ${truncate(e.message || e, 300)}`);
+    if (combined.aborted) throw new Error(signal.aborted ? t('gen.canceled') : t('gen.timeout', { sec: timeoutSec }));
+    throw new Error(t('gen.requestFailed', { error: truncate(e.message || e, 300) }));
   }
   let text;
   try {
     text = await res.text();
   } catch (e) {
-    if (combined.aborted) throw new Error(signal.aborted ? '已取消' : `请求超时（${timeoutSec}s）`);
-    throw new Error(`读取响应失败: ${truncate(e.message || e, 300)}`);
+    if (combined.aborted) throw new Error(signal.aborted ? t('gen.canceled') : t('gen.timeout', { sec: timeoutSec }));
+    throw new Error(t('gen.readFailed', { error: truncate(e.message || e, 300) }));
   }
   let json = null;
   try {
@@ -441,7 +435,7 @@ async function fetchOnce({ url, headers, body, signal, timeoutSec, fetchImpl = d
     /* 非 JSON */
   }
   if (!res.ok) throw new Error(describeHttpError(res.status, text, json));
-  if (!json) throw new Error(`无法解析响应: ${truncate(text, 300)}`);
+  if (!json) throw new Error(t('gen.parseFailed', { text: truncate(text, 300) }));
   return json;
 }
 
@@ -452,9 +446,9 @@ async function download(url, signal, fetchImpl = defaultFetch) {
     res = await fetchImpl(url, { signal: combined });
   } catch (e) {
     if (combined.aborted) throw new Error(abortReason(combined, 300));
-    throw new Error(`下载失败: ${truncate(e.message || e, 200)}`);
+    throw new Error(t('gen.downloadFailed', { error: truncate(e.message || e, 200) }));
   }
-  if (!res.ok) throw new Error(`下载失败: HTTP ${res.status} ${truncate(url, 200)}`);
+  if (!res.ok) throw new Error(t('gen.downloadHttp', { status: res.status, url: truncate(url, 200) }));
   return Buffer.from(await res.arrayBuffer());
 }
 
@@ -481,7 +475,7 @@ async function runGeneration({ settings, run, signal, onItem, limiter, fetchImpl
     try {
       await lim.acquire(signal);
     } catch {
-      onItem(i, { status: 'canceled', error: '已取消' });
+      onItem(i, { status: 'canceled', error: t('gen.canceled') });
       return;
     }
     try {
@@ -497,10 +491,11 @@ async function runGeneration({ settings, run, signal, onItem, limiter, fetchImpl
     try {
       const json = await fetchOnce({ url, headers, body, signal, timeoutSec, fetchImpl });
       const img = extractImage(json);
-      if (!img) throw new Error(`结果既无 b64_json 也无 url: ${truncate(JSON.stringify(json), 300)}`);
+      if (!img) throw new Error(t('gen.noImage', { json: truncate(JSON.stringify(json), 300) }));
       const bytes = img.b64 ? decodeBase64(img.b64) : await download(img.url, signal, fetchImpl);
       if (!detectImageExt(bytes)) {
-        throw new Error(`返回的内容不是 PNG / JPEG / WebP / GIF 图片（${bytes.length} 字节）: ${truncate(bytes.toString('latin1').replace(/[^\x20-\x7e]/g, '.'), 60)}`);
+        const preview = truncate(bytes.toString('latin1').replace(/[^\x20-\x7e]/g, '.'), 60);
+        throw new Error(t('gen.notImage', { bytes: bytes.length, preview }));
       }
       const target = await writeUnique(plan, i, run.count, bytes);
       const dims = imageSize(bytes);
@@ -524,7 +519,7 @@ async function runGeneration({ settings, run, signal, onItem, limiter, fetchImpl
 // GET {base}/models，用于设置页「从接口获取模型」和「测试连接」
 async function listModels(apiUrl, apiKey, fetchImpl = defaultFetch) {
   const base = resolveApiBase(apiUrl);
-  if (!base) throw new Error('请先填写接口地址');
+  if (!base) throw new Error(t('gen.needApiUrl'));
   const res = await fetchImpl(`${base}/models`, {
     headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
     signal: AbortSignal.timeout(20000),
@@ -555,7 +550,6 @@ module.exports = {
   imageSize,
   previewRequest,
   preparePreview,
-  SIZE_FORMAT_HINT,
   runGeneration,
   Limiter,
   extractImage,

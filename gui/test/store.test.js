@@ -83,3 +83,151 @@ test('设置：列表字段是字符串或其他类型时也能加载', () => {
   assert.deepEqual(t.models, ['gpt-image-1']);
   assert.deepEqual(t.qualities, []);
 });
+
+test('设置：两次保存交错时按顺序写入，不会用旧内容覆盖新设置', async () => {
+  const { SettingsStore } = require('../electron/store');
+  const dir = tmpDir();
+  const store = await SettingsStore.load(dir);
+  // 假的异步加密：第一次很慢、第二次很快。不排队的话，第一次会最后写文件，把第二次的修改冲掉
+  const delays = [80, 5];
+  store.safe = {
+    isAsyncEncryptionAvailable: async () => true,
+    encryptStringAsync: (s) => new Promise((r) => setTimeout(() => r(Buffer.from(`enc:${s}`)), delays.shift() ?? 0)),
+  };
+  await Promise.all([
+    store.save({ language: 'ja', apiKey: 'sk-one' }),
+    store.save({ apiUrl: 'https://example.com/v1', apiKey: 'sk-two' }),
+  ]);
+  const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
+  assert.equal(onDisk.language, 'ja');
+  assert.equal(onDisk.apiUrl, 'https://example.com/v1');
+  assert.equal(Buffer.from(onDisk.apiKeyEnc, 'base64').toString(), 'enc:sk-two');
+  assert.equal(onDisk.apiKey, undefined, '加密成功时不写明文');
+
+  // 前一次保存失败也不影响后面排队的保存
+  store.safe = { isAsyncEncryptionAvailable: async () => true, encryptStringAsync: async () => Buffer.from('x') };
+  const bad = store.save({ timeoutSec: 30, models: null, get defaultModel() { throw new Error('boom'); } });
+  await assert.rejects(bad, /boom/);
+  await store.save({ timeoutSec: 45 });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8')).timeoutSec, 45);
+});
+
+test('设置：Key 没变时沿用原来的密文，钥匙串暂时不可用也不会降级成明文', async () => {
+  const { SettingsStore } = require('../electron/store');
+  const dir = tmpDir();
+  const read = () => JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
+  const store = await SettingsStore.load(dir);
+  let calls = 0;
+  store.safe = {
+    isAsyncEncryptionAvailable: async () => true,
+    encryptStringAsync: async (s) => {
+      calls += 1;
+      return Buffer.from(`enc:${s}`);
+    },
+  };
+  await store.save({ apiKey: 'sk-secret' });
+  const first = read().apiKeyEnc;
+  assert.ok(first);
+
+  // 钥匙串暂时不可用时只切换语言：密文原样保留，不写明文，也不重新加密
+  store.safe = { isAsyncEncryptionAvailable: async () => false, encryptStringAsync: async () => assert.fail('不应重新加密') };
+  await store.save({ language: 'ja' });
+  assert.equal(read().apiKeyEnc, first);
+  assert.equal(read().apiKey, undefined);
+  assert.equal(read().language, 'ja');
+  assert.equal(store.keyStorage, 'keychain');
+  assert.equal(calls, 1);
+
+  // 换了 Key 又没法加密时，才按原来的规则退回明文，设置页会显示「明文」
+  await store.save({ apiKey: 'sk-new' });
+  assert.equal(read().apiKey, 'sk-new');
+  assert.equal(read().apiKeyEnc, undefined);
+  assert.equal(store.keyStorage, 'plain');
+});
+
+test('设置：启动时解不开的 Key 密文，在填新 Key 之前一直保留', async () => {
+  const { SettingsStore } = require('../electron/store');
+  const dir = tmpDir();
+  const file = path.join(dir, 'settings.json');
+  // 单元测试里没有 Electron 的钥匙串，解密必然失败，相当于钥匙串暂时不可用
+  fs.writeFileSync(file, JSON.stringify({ apiUrl: 'https://example.com/v1', apiKeyEnc: 'b2xkLWNpcGhlcnRleHQ=' }));
+  const store = await SettingsStore.load(dir);
+  assert.equal(store.get().apiKey, '');
+
+  await store.save({ language: 'ja' });
+  let onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(onDisk.apiKeyEnc, 'b2xkLWNpcGhlcnRleHQ=', '只切换语言不应删掉原来的密文');
+  assert.equal(onDisk.language, 'ja');
+  await store.save({ apiKey: '' }); // 表单里 Key 本来就是空的，原样保存也不删
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).apiKeyEnc, 'b2xkLWNpcGhlcnRleHQ=');
+
+  // 填了新 Key 之后旧密文才作废
+  store.safe = { isAsyncEncryptionAvailable: async () => false, encryptStringAsync: async () => assert.fail() };
+  await store.save({ apiKey: 'sk-new' });
+  onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(onDisk.apiKey, 'sk-new');
+  assert.equal(onDisk.apiKeyEnc, undefined);
+  await store.save({ apiKey: '' });
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).apiKeyEnc, undefined, '清空新 Key 时旧密文不会回来');
+});
+
+test('设置：解不开的旧密文只在接口地址没变时保留，换了地址重启后不会带上旧 Key', async () => {
+  const { SettingsStore } = require('../electron/store');
+  const dir = tmpDir();
+  const file = path.join(dir, 'settings.json');
+  fs.writeFileSync(file, JSON.stringify({ apiUrl: 'https://old.example.com/v1', apiKeyEnc: 'b2xkLWNpcGhlcnRleHQ=' }));
+  const store = await SettingsStore.load(dir);
+  await store.save({ apiUrl: 'https://new.example.com/v1' });
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).apiKeyEnc, undefined);
+  // 改回原来的地址也不会再出现
+  await store.save({ apiUrl: 'https://old.example.com/v1' });
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).apiKeyEnc, undefined);
+  // 重启后读到的是没有 Key 的设置
+  const again = await SettingsStore.load(dir);
+  assert.equal(again.get().apiKey, '');
+  assert.equal(again.keyEncUnreadable, null);
+});
+
+test('设置：写盘失败时内存里还是旧设置，之后只切换语言不会把失败的改动写进去', async () => {
+  const { SettingsStore } = require('../electron/store');
+  const dir = tmpDir();
+  const store = await SettingsStore.load(dir);
+  await store.save({ apiUrl: 'https://good.example.com/v1' });
+  const realFile = store.file;
+  // 让写盘失败：目标目录的上一级是个普通文件
+  fs.writeFileSync(path.join(dir, 'blocker'), '');
+  store.file = path.join(dir, 'blocker', 'settings.json');
+  await assert.rejects(store.save({ apiUrl: 'https://bad.example.com/v1', proxy: 'http://127.0.0.1:1' }));
+  assert.equal(store.get().apiUrl, 'https://good.example.com/v1');
+  assert.equal(store.get().proxy, '');
+
+  store.file = realFile;
+  await store.save({ language: 'ja' });
+  const onDisk = JSON.parse(fs.readFileSync(realFile, 'utf8'));
+  assert.equal(onDisk.apiUrl, 'https://good.example.com/v1');
+  assert.equal(onDisk.proxy, '');
+  assert.equal(onDisk.language, 'ja');
+  assert.deepEqual(fs.readdirSync(dir).filter((f) => f.endsWith('.tmp')), [], '不留下临时文件');
+});
+
+test('设置：解不开的旧 Key 显示为 locked，可以直接删除，重启后不会恢复', async () => {
+  const { SettingsStore } = require('../electron/store');
+  const dir = tmpDir();
+  const file = path.join(dir, 'settings.json');
+  fs.writeFileSync(file, JSON.stringify({ apiUrl: 'https://example.com/v1', apiKeyEnc: 'b2xkLWNpcGhlcnRleHQ=' }));
+  const store = await SettingsStore.load(dir);
+  assert.equal(store.keyStorage, 'locked');
+  await store.save({ language: 'ja' });
+  assert.equal(store.keyStorage, 'locked');
+
+  await store.forgetUnreadableKey();
+  assert.equal(store.keyStorage, 'none');
+  const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(onDisk.apiKeyEnc, undefined);
+  assert.equal(onDisk.language, 'ja');
+  assert.equal(onDisk.apiUrl, 'https://example.com/v1');
+
+  const again = await SettingsStore.load(dir);
+  assert.equal(again.keyStorage, 'none');
+  assert.equal(again.keyEncUnreadable, null);
+});

@@ -1,5 +1,5 @@
 // img.sh 的集成测试：本地起一个假的生图接口，用 bash 实际运行脚本。
-// img.sh 用到了 GNU 的 stat -c，只在 Linux 上跑；缺少 bash / curl / jq 时也跳过。
+// 只在 Linux 上跑（CI 的 macOS / Windows 不跑这部分）；缺少 bash / curl / jq 时也跳过。
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

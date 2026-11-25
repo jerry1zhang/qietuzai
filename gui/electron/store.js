@@ -5,6 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { app, safeStorage } = require('electron');
 const { normalizeSize } = require('./generator');
+const { isLocale, t } = require('../shared/i18n.mjs');
 
 function readJson(file, fallback) {
   try {
@@ -25,7 +26,12 @@ function writeJsonAtomic(file, data) {
   } catch {
     /* 不支持 chmod 的文件系统 */
   }
-  fs.renameSync(tmp, file);
+  try {
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    fs.rmSync(tmp, { force: true });
+    throw e;
+  }
 }
 
 // Linux 上没有可用的钥匙串时，safeStorage 只是用固定密钥做简单加密
@@ -63,6 +69,7 @@ function defaultSettings() {
     outputDir: path.join(app?.getPath ? app.getPath('pictures') : os.homedir(), '切图仔'),
     proxy: '',
     theme: 'system',
+    language: 'system', // 界面语言：system 跟随系统，或者 zh-CN、en 这样的语言代码
   };
 }
 
@@ -70,8 +77,18 @@ class SettingsStore {
   constructor(file, data) {
     this.file = file;
     this.data = data;
-    // API Key 的保存方式：none（没填）/ keychain（系统钥匙串加密）/ basic（简单加密）/ plain（明文）
+    // API Key 的保存方式：none（没填）/ keychain（系统钥匙串加密）/ basic（简单加密）/ plain（明文）/
+    // locked（有保存的 Key，但钥匙串暂时解不开）
     this.keyStorage = 'none';
+    this.safe = safeStorage; // 测试时换成假的加密实现
+    this.saving = Promise.resolve();
+    // 上次写入文件的密文和它对应的 Key：Key 没变就沿用，不重新加密。
+    // 否则只改了别的设置（比如切换语言）时，碰上钥匙串暂时不可用，会把原来的密文降级成明文
+    this.keyEnc = null;
+    this.keyEncFor = null;
+    // 启动时没能解密的密文（钥匙串暂时不可用等）和当时的接口地址：Key 还空着、接口地址也没改时原样留在文件里，
+    // 钥匙串恢复后下次启动还能解开。用户填了新 Key 或者换了接口地址就丢掉，免得旧服务的 Key 被发给新地址
+    this.keyEncUnreadable = null;
   }
 
   static async load(dir) {
@@ -79,6 +96,7 @@ class SettingsStore {
     const raw = readJson(file, {});
     const { apiKeyEnc, ...rest } = raw;
     const data = { ...defaultSettings(), ...rest };
+    let unreadable = null;
     // 旧版本或加密不可用时明文保存的 Key，这次能加密就顺便迁移
     let reEncrypt = Boolean(rest.apiKey) && !apiKeyEnc;
     if (apiKeyEnc) {
@@ -88,10 +106,17 @@ class SettingsStore {
         reEncrypt = r.shouldReEncrypt;
       } catch {
         data.apiKey = ''; // 钥匙串变化导致无法解密时，需要重新填写
+        unreadable = apiKeyEnc;
       }
     }
     const store = new SettingsStore(file, normalizeSettings(data));
+    if (unreadable) store.keyEncUnreadable = { enc: unreadable, apiUrl: store.data.apiUrl };
+    if (apiKeyEnc && data.apiKey && !reEncrypt) {
+      store.keyEnc = apiKeyEnc;
+      store.keyEncFor = store.data.apiKey;
+    }
     if (reEncrypt) await store.save({});
+    else if (store.keyEncUnreadable) store.keyStorage = 'locked';
     else if (apiKeyEnc && data.apiKey) store.keyStorage = weakBackend() ? 'basic' : 'keychain';
     else if (data.apiKey) store.keyStorage = 'plain';
     return store;
@@ -101,24 +126,45 @@ class SettingsStore {
     return { ...this.data };
   }
 
-  async save(patch) {
-    this.data = normalizeSettings({ ...this.data, ...patch });
-    const { apiKey, ...rest } = this.data;
+  // 保存一个个排队执行：加密 Key 要等异步结果，两次保存交错时（比如切换语言的自动保存和点「保存」），
+  // 先发出的那次可能后写完，用旧内容把新设置覆盖掉
+  save(patch, opts) {
+    const run = this.saving.then(() => this.saveNow(patch, opts));
+    this.saving = run.catch(() => {});
+    return run;
+  }
+
+  // 删掉解不开的旧 Key（设置页 API Key 一栏的「删除」）
+  forgetUnreadableKey() {
+    return this.save({}, { dropUnreadable: true });
+  }
+
+  // 先算好要写的内容，写盘成功后才更新内存：写盘失败时内存还是旧设置，下次保存不会把这次失败的改动带进去
+  async saveNow(patch, { dropUnreadable = false } = {}) {
+    const next = normalizeSettings({ ...this.data, ...patch });
+    const { apiKey, ...rest } = next;
     const out = { ...rest };
     // API Key 尽量用系统钥匙串加密保存。不可用时退回明文（和 img.sh 的 img.config 一样），
     // 文件权限仅当前用户可读，设置页会明确提示当前的保存方式。
     let enc = null;
-    if (apiKey) {
+    if (apiKey && apiKey === this.keyEncFor) enc = this.keyEnc;
+    else if (apiKey) {
       try {
-        if (await safeStorage.isAsyncEncryptionAvailable()) enc = (await safeStorage.encryptStringAsync(apiKey)).toString('base64');
+        if (await this.safe.isAsyncEncryptionAvailable()) enc = (await this.safe.encryptStringAsync(apiKey)).toString('base64');
       } catch {
         enc = null;
       }
     }
+    const unreadable = !apiKey && !dropUnreadable && this.keyEncUnreadable?.apiUrl === next.apiUrl ? this.keyEncUnreadable : null;
     if (enc) out.apiKeyEnc = enc;
     else if (apiKey) out.apiKey = apiKey;
+    else if (unreadable) out.apiKeyEnc = unreadable.enc;
     writeJsonAtomic(this.file, out);
-    this.keyStorage = !apiKey ? 'none' : enc ? (weakBackend() ? 'basic' : 'keychain') : 'plain';
+    this.data = next;
+    this.keyEncUnreadable = unreadable;
+    this.keyEnc = enc;
+    this.keyEncFor = enc ? apiKey : null;
+    this.keyStorage = !apiKey ? (unreadable ? 'locked' : 'none') : enc ? (weakBackend() ? 'basic' : 'keychain') : 'plain';
     return this.get();
   }
 }
@@ -184,6 +230,7 @@ function normalizeSettings(s) {
   out.outputDir = resolveDir(out.outputDir) || d.outputDir;
   out.proxy = String(out.proxy || '').trim();
   if (!['system', 'light', 'dark'].includes(out.theme)) out.theme = 'system';
+  if (out.language !== 'system' && !isLocale(out.language)) out.language = 'system';
   return out;
 }
 
@@ -204,7 +251,7 @@ class HistoryStore {
           for (const it of r.items || []) {
             if (it.status === 'pending' || it.status === 'running') {
               it.status = 'error';
-              it.error = '应用已关闭，任务中断';
+              it.error = t('main.interrupted');
             }
           }
           dirty = true;
@@ -224,7 +271,7 @@ class HistoryStore {
 
   create(title) {
     const now = Date.now();
-    const s = { id: uid(), title: title || '新任务', createdAt: now, updatedAt: now, runs: [] };
+    const s = { id: uid(), title: title || t('session.untitled'), createdAt: now, updatedAt: now, runs: [] };
     this.sessions.push(s);
     this.saveSoon();
     return s;
@@ -248,7 +295,7 @@ class HistoryStore {
 
   addRun(sessionId, run) {
     const s = this.get(sessionId);
-    if (!s) throw new Error('会话不存在');
+    if (!s) throw new Error(t('main.noSession'));
     s.runs.push(run);
     s.updatedAt = Date.now();
     this.saveSoon();
