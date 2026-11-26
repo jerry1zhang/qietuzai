@@ -97,8 +97,8 @@ npm run dist:mac
 
 产物：
 
-- `release/qietuzai-0.1.0-mac-arm64.dmg`：Apple Silicon（M 系列芯片）
-- `release/qietuzai-0.1.0-mac-x64.dmg`：Intel 芯片
+- `release/qietuzai-<版本号>-mac-arm64.dmg`：Apple Silicon（M 系列芯片）
+- `release/qietuzai-<版本号>-mac-x64.dmg`：Intel 芯片
 - 另外还有对应的 `.zip`，解压就是 `切图仔.app`
 
 没有 Mac 的话，可以用 GitHub Actions。仓库根目录（`切图仔/`）带了 `.github/workflows/build.yml`，推送 `v*` tag 或者在 Actions 页面手动触发，就会在 macOS、Windows、Linux 上各打一份，打完在这次运行的 Artifacts 里下载。
